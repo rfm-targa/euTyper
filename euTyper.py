@@ -15,9 +15,10 @@ DESCRIPTION
 
 import os
 import sys
-import time
+import csv
 import argparse
 import subprocess
+import datetime as dt
 
 from Bio import SeqIO
 from Bio.Seq import Seq
@@ -306,16 +307,142 @@ def execute_augustus(input_file, species, output_file):
     return proc
 
 
-def main(input_file, output_path, species):
+def make_blast_db(input_fasta, output_path, db_type):
+    """ Creates a BLAST database.
+
+        Args:
+            input_fasta (str): path to the input file with sequences.
+            output_path (str): path to the output database.
+            db_type (str): type of the database, nucleotide (nuc) or
+            protein (prot).
+
+        Returns:
+            Creates a BLAST database with the input sequences.
+    """
+
+    blastdb_cmd = ['makeblastdb', '-in', input_fasta, '-out', output_path,
+                   '-parse_seqids', '-dbtype', db_type]
+
+    makedb_cmd = subprocess.Popen(blastdb_cmd,
+                                  stdout=subprocess.PIPE,
+                                  stderr=subprocess.PIPE)
+    # stdout = makedb_cmd.stdout.readlines()
+    # stderr = makedb_cmd.stderr.readlines()
+    # print(stdout, stderr)
+
+    makedb_cmd.wait()
+
+
+def run_blast(blastp_path, blast_db, fasta_file, blast_output,
+              max_hsps=1, threads=1, ids_file=None):
+    """
+    """
+
+    blast_args = [blastp_path, '-db', blast_db, '-query', fasta_file,
+                  '-out', blast_output, '-outfmt', '6 qseqid sseqid score',
+                  '-max_hsps', str(max_hsps), '-num_threads', str(threads),
+                  '-evalue', '0.001']
+
+    if ids_file is not None:
+        blast_args.extend(['-seqidlist', ids_file])
+
+    blast_proc = subprocess.Popen(blast_args,
+                                  stdout=subprocess.PIPE,
+                                  stderr=subprocess.PIPE)
+
+    stderr = blast_proc.stderr.readlines()
+
+    return stderr
+
+
+def read_blast_tabular(blast_tabular_file):
+    """ Read a file with BLAST results in tabular format
+
+        Args:
+            blast_tabular_file (str): path to output file of BLAST.
+
+        Returns:
+            blasting_results (list): a list with a sublist per line
+            in the input file.
+    """
+
+    with open(blast_tabular_file, 'r') as blastout:
+        reader = csv.reader(blastout, delimiter='\t')
+        blasting_results = [row for row in reader]
+
+    return blasting_results
+
+
+def apply_bsr(inputs):
+    """
+    """
+
+    blast_file = inputs[0]
+    blast_results = read_blast_tabular(blast_file)
+    self_scores = {r[0]: r[2] for r in blast_results if r[0] == r[1]}
+    # do not include self-scores lines, no need to evaluate those hits
+    blast_results = [r for r in blast_results if r[0] != r[1]]
+
+    fasta_file = inputs[1]
+    lengths = {}
+    for k in self_scores:
+        record = fasta_file.get(k)
+        sequence = str(record.seq)
+        lengths[k] = len(sequence)
+
+    bsr = inputs[2]
+
+    excluded_alleles = []
+    for res in blast_results:
+
+        query = res[0]
+        hit = res[1]
+        score = res[2]
+
+        if query not in excluded_alleles:
+            # try to apply BSR strategy
+            try:
+                self_blast_score = self_scores[query]
+
+                query_length = lengths[query]
+                hit_length = lengths[hit]
+                blast_score_ratio = float(score) / float(self_blast_score)
+
+                # BSR has to be greater than threshold, just as in the original function
+                if blast_score_ratio >= bsr and hit not in excluded_alleles:
+
+                    if hit_length > query_length and query not in excluded_alleles:
+                        excluded_alleles.append(query)
+
+                    elif hit_length <= query_length:
+                        excluded_alleles.append(hit)
+            # it might not work because there is no self score for
+            # some sequences due to low complexity regions...
+            except Exception:
+                excluded_alleles.append(query)
+
+    return excluded_alleles
+
+
+def main(input_file, output_path, species, bsr):
+
+    start_date = dt.datetime.now()
+    start_date_str = dt.datetime.strftime(start_date, '%Y-%m-%dT%H:%M:%S')
+    print('\nStarted at: {0}\n'.format(start_date_str))
 
     augustus_outfile = os.path.join(output_path, 'augustus_results.gff')
+    print('Running AUGUSTUS...')
     exit_code = execute_augustus(input_file, species, augustus_outfile)
     if exit_code != 0:
         sys.exit('AUGUSTUS returned exit code != 0. Exited.')
+    print('Finished running AUGUSTUS.')
 
     # import input genomes
-    chrs = {rec.id: str(rec.seq).upper() for rec in SeqIO.parse(input_file, 'fasta')}
+    chrs = {rec.id: str(rec.seq).upper()
+            for rec in SeqIO.parse(input_file, 'fasta')}
 
+    print('Extracting CDSs from AUGUSTUS results and creating '
+          'full gene sequences...')
     # import AUGUSTUS results
     with open(augustus_outfile, 'r') as af:
         augustus_lines = af.readlines()
@@ -333,14 +460,14 @@ def main(input_file, output_path, species):
                                    cds_line[3], cds_line[4],
                                    cds_line[6], cds_line[7]))
 
-    # the last value is the codon phase information
-    # this information does not mean that we should discard 0, 1 or 2 bases
-    # from the start of the sequence. It means that 0, 1 or 2 bases of the sequence
+    # the last value is the codon phase information this information
+    # does not mean that we should discard 0, 1 or 2 bases from the
+    # start of the sequence. It means that 0, 1 or 2 bases of the sequence
     # will complete the last codon from the previous CDS and the first complete
     # codon of the new CDS only starts after those initial bases.
-    # So, a CDS might not have length that is a multiple of 3 and will not end in a complete
-    # codon. We need to concatenate all gene CDSs to obtain the full sequence that can be
-    # translated.
+    # So, a CDS might not have length that is a multiple of 3 and will not
+    # end in a complete codon. We need to concatenate all gene CDSs to obtain
+    # the full sequence that can be translated.
 
     # get cds sequences for each gene
     gene_cds = {}
@@ -360,11 +487,7 @@ def main(input_file, output_path, species):
         gene_cds[gid] = (cds_sequences, list(set(strands)))
 
     # join CDS sequences for each gene and translate
-    # not working for sequences in antisense strand
-    # I might be concatenating CDS in the antisense as if they were
-    # in the sense strand...noob me :'|
-    # I have to concatenate sequences in the right order and orientation!
-    # Seems to work fine now!!! :)
+    # must concatenate sequences in the right order and orientation
     gene_dna_prot = {}
     for gid, gcds in gene_cds.items():
         strand = gcds[1]
@@ -379,19 +502,56 @@ def main(input_file, output_path, species):
         elif len(strand) > 1:
             print(gid)
 
+    # save DNA and Protein sequences to file
+    dna_records = ['>{0}\n{1}'.format(k, v[0])
+                   for k, v in gene_dna_prot.items()]
+    protein_records = ['>{0}\n{1}'.format(k, v[1])
+                       for k, v in gene_dna_prot.items()]
+
+    proteins_file = os.path.join(output_path, 'proteins.fasta')
+    with open(proteins_file, 'w') as pf:
+        pf.write('\n'.join(protein_records))
+
+    dna_file = os.path.join(output_path, 'dna.fasta')
+    with open(dna_file, 'w') as df:
+        df.write('\n'.join(dna_records))
+
+    print('Aligning translated genes with BLASTp...')
+    # create BLASTdb
+    blastdb = os.path.join(output_path, 'prots')
+    make_blast_db(proteins_file, blastdb, 'prot')
+
+    # align proteins with BLASTp
+    blast_output = os.path.join(output_path, 'blastout.tsv')
+    blasterr = run_blast('blastp', blastdb, proteins_file, blast_output,
+                         max_hsps=1, threads=1, ids_file=None)
+
+    # index FASTA file with DNA sequences
+    indexed_fasta = SeqIO.index(dna_file, 'fasta')
+
+    # apply BSR
+    excluded_ids = apply_bsr([blast_output, indexed_fasta, bsr])
+    print('Excluded {0} sequences highly similar to larger '
+          'sequences.'.format(len(excluded_ids)))
+
+    # determine distinct set of gene ids
+    distinct_ids = [i for i in gene_dna_prot.keys()
+                    if str(i) not in excluded_ids]
+    
+    print('Constructing final schema structure...')
     schema_dir = os.path.join(output_path, 'schema_seed')
     schema_short_dir = os.path.join(schema_dir, 'short')
     os.makedirs(schema_short_dir)
 
     # save files
-    for locus, seqs in gene_dna_prot.items():
-        locus_file = 'gene{0}.fasta'.format(locus)
+    for seqid in distinct_ids:
+        locus_file = 'gene{0}.fasta'.format(seqid)
         schema_file = os.path.join(schema_dir, locus_file)
-        locus_short_file = 'gene{0}_short.fasta'.format(locus)
+        locus_short_file = 'gene{0}_short.fasta'.format(seqid)
         schema_short_file = os.path.join(schema_short_dir, locus_short_file)
 
-        header = '>gene{0}_1'.format(locus)
-        seq = seqs[0]
+        header = '>gene{0}_1'.format(seqid)
+        seq = str(indexed_fasta.get(str(seqid)).seq)
 
         record = '\n'.join([header, seq]) + '\n'
 
@@ -401,7 +561,16 @@ def main(input_file, output_path, species):
         with open(schema_short_file, 'w') as ssf:
             ssf.write(record)
 
-    print('Created schema seed!')
+    end_date = dt.datetime.now()
+    end_date_str = dt.datetime.strftime(end_date, '%Y-%m-%dT%H:%M:%S')
+
+    delta = end_date - start_date
+    minutes, seconds = divmod(delta.total_seconds(), 60)
+
+    print('\nFinished at: {0}'.format(end_date_str))
+    print('Created schema with {0} genes based on {1} genome in'
+          '{2: .0f}m{3: .0f}s.'.format(len(distinct_ids), 1,
+                                       minutes, seconds))
 
 
 def parse_arguments():
@@ -421,13 +590,18 @@ def parse_arguments():
                         dest='species',
                         help='')
 
+    parser.add_argument('--bsr', type=float, required=False,
+                        default=0.6, dest='bsr',
+                        help='')
+
     args = parser.parse_args()
 
-    return [args.input_files, args.output_path, args.species]
+    return [args.input_files, args.output_path, args.species,
+            args.bsr]
 
 
 if __name__ == '__main__':
 
     args = parse_arguments()
 
-    main(args[0], args[1], args[2])
+    main(args[0], args[1], args[2], args[3])
