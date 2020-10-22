@@ -1,15 +1,17 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-AUTHOR
-
-    Rafael Mamede
-    github: @rfm-targa
-
-DESCRIPTION
+Purpose
+-------
 
 
 
+Expected input
+--------------
+
+
+Code documentation
+------------------
 """
 
 
@@ -25,18 +27,18 @@ from Bio.Seq import Seq
 
 
 def reverse_complement(dna_sequence):
-    """ Determines the reverse complement of given DNA strand.
+    """ Determines the reverse complement of a given DNA strand.
 
-        Args:
-            strDNA (str): string representing a DNA sequence.
+        Parameters
+        ----------
+        dna_sequence : str
+            String representing a DNA sequence.
 
-        Returns:
-            revC_dna (str): the reverse complement of the DNA sequence, without
-            lowercase letters.
-
-        Example:
-            >>> reverse_complement('ATCGgcaNn')
-            'NNTGCCGAT'
+        Returns
+        -------
+        reverse_complement_strand : str
+            The reverse complement of the DNA sequence (without
+            lowercase letters).
     """
 
     base_complement = {'A': 'T', 'C': 'G', 'G': 'C', 'T': 'A',
@@ -59,13 +61,17 @@ def reverse_complement(dna_sequence):
 
 
 def reverse_str(string):
-    """ Reverse character order in input string.
+    """ Reverses character order in input string.
 
-        Args:
-            string (str): string to be reversed.
+        Parameters
+        ----------
+        string : str
+            String to be reversed.
 
-        Returns:
-            revstr (str): reverse of input string.
+        Returns
+        -------
+        revstr :str
+            Reverse of input string.
     """
 
     revstr = string[::-1]
@@ -76,12 +82,17 @@ def reverse_str(string):
 def translate_sequence(dna_str, table_id):
     """ Translate a DNA sequence using the BioPython package.
 
-        Args:
-            dna_str (str): DNA sequence as string type.
-            table_id (int): translation table identifier.
+        Parameters
+        ----------
+        dna_str :str
+            DNA sequence as string type.
+        table_id : int
+            Translation table identifier.
 
-        Returns:
-            protseq (str): protein sequence created by translating
+        Returns
+        -------
+        protseq : str
+            Protein sequence created by translating
             the input DNA sequence.
     """
 
@@ -95,18 +106,25 @@ def translate_dna_aux(dna_sequence, method, table_id):
     """ Tries to translate an input DNA sequence in specified orientation
         and stores exceptions when the input sequence cannot be translated.
 
-        Args:
-            dna_sequence (str): string representing a DNA sequence.
-            method (str): a string specifying the way the sequence will
+        Parameters
+        ----------
+        dna_sequence : str
+            String representing a DNA sequence.
+        method : str
+            A string specifying the way the sequence will
             be oriented to attempt translation.
-            table_id (int): translation table identifier.
+        table_id : int
+            Translation table identifier.
 
-        Returns:
-            List with following elements if translation is successful:
-                protseq (str): string representing the translated DNA sequence.
-                myseq (str): string representing the DNA sequence in the
+        Returns
+        -------
+        List with following elements if translation is successful:
+            protseq : str
+                String representing the translated DNA sequence.
+            myseq : str
+                String representing the DNA sequence in the
                 orientation used to translate it.
-            Otherwise, returns string derived from captured exception.
+        Otherwise, returns string derived from captured exception.
     """
 
     myseq = dna_sequence
@@ -146,15 +164,19 @@ def check_str_alphabet(string, alphabet):
     """ Determine if a string only has characters from specified
         alphabet.
 
-        Args:
-            string (str): input string.
-            alphabet (str): string that has all characters from desired
+        Parameters
+        ----------
+        string : str
+            Input string.
+        alphabet : str
+            String that has all characters from desired
             alphabet.
 
-        Returns:
-            "True" if sequence only has characters from specified
-            alphabet and string "ambiguous or invalid characters" if
-            it any of its characters is not in the alphabet.
+        Returns
+        -------
+        "True" if sequence only has characters from specified
+        alphabet and string "ambiguous or invalid characters" if
+        it any of its characters is not in the alphabet.
     """
 
     valid_chars = alphabet
@@ -168,15 +190,19 @@ def check_str_multiple(string, number):
     """ Determine if length of input string is multiple of
         a specified number.
 
-        Args:
-            string (str): input string.
-            number (int): integer that will be used to check if sequence
+        Parameters
+        ----------
+        string : str
+            Input string.
+        number : int
+            Integer that will be used to check if sequence
             length is multiple of.
 
-        Returns:
-            "True" if the length of the sequence is a multiple of the
-            specified number and "sequence length is not a multiple of number"
-            if condition is not satisfied.
+        Returns
+        -------
+        "True" if the length of the sequence is a multiple of the
+        specified number and "sequence length is not a multiple of number"
+        if condition is not satisfied.
     """
 
     if len(string) % number == 0:
@@ -192,19 +218,28 @@ def translate_dna(dna_sequence, table_id, min_len):
         different orientations. Stores exceptions so that it is possible to
         understand the sequence could not be translated.
 
-        Args:
-            dna_sequence (str):
-            table_id (int):
+        Parameters
+        ----------
+        dna_sequence : str
+            String representing a DNA sequence.
+        table_id : int
+            Translation table identifier.
+        min_len : int
+            Minimum accepted length. Sequences with length below
+            this value will not be translated.
 
-        Returns:
-            If the sequence can be translated,
-            a list with following elements:
-                sequence (list): a list with two elemets, the protein sequence
+        Returns
+        -------
+        If the sequence can be translated:
+            sequence : list
+                A list with two elemets, the protein sequence
                 and the DNA sequence in the correct orientation.
-                coding_strand (str): the strand orientation that had could be
+            coding_strand : str
+                The strand orientation that had could be
                 translated.
-            Otherwise:
-                exception_str (str): a string containing the exceptions that
+        Otherwise:
+            exception_str : str
+                A string containing the exceptions that
                 determined that the sequence could not be translated.
     """
 
@@ -258,28 +293,38 @@ def retranslate(sequence, method, table_id, strands, exception_collector):
     """ Sends sequence for translation and collects exceptions when
         the sequence cannot be translated.
 
-        Args:
-            sequence (str): string representing a DNA sequence.
-            method (str): a string specifying the sequence orientation
+        Parameters
+        ----------
+        sequence : str
+            String representing a DNA sequence.
+        method : str
+            A string specifying the sequence orientation
             that should be used to attempt translation.
-            table_id (int): translation table identifier.
-            strands (list): list with 4 different orientations that can
+        table_id : int
+            Translation table identifier.
+        strands : list
+            List with 4 different orientations that can
             be checked.
-            exception_collector (list): list used to store all exceptions
-            arising from translation attempts.
+        exception_collector : list
+            List used to store all exceptions arising from
+            translation attempts.
 
-        Returns:
-            A list with following elements, if the sequence can be translated:
-                translated_seq (list): a list with the protein sequence and
-                with the DNA sequence in the orientation used for translation.
-                exception_collector (list): a list with the exceptions that are
-                captured when the sequence could not be translated.
-            Otherwise:
-                translated_seq (str): a string with the exception/reason why
+        Returns
+        -------
+        A list with following elements:
+            translated_seq : list
+                A list with the protein sequence and with the DNA
+                sequence in the orientation used for translation.
+            exception_collector : list
+                A list with the exceptions that are captured when
                 the sequence could not be translated.
-                exception_collector (list): list with all exception that have
-                been captured during translation attempts of the current
-                sequence.
+        Otherwise:
+            translated_seq : str
+                A string with the exception/reason why the sequence
+                could not be translated.
+            exception_collector : list
+                List with all exception that have been captured during
+                translation attempts of the current sequence.
     """
 
     translated_seq = translate_dna_aux(sequence, method, table_id)
@@ -291,7 +336,19 @@ def retranslate(sequence, method, table_id, strands, exception_collector):
 
 
 def execute_augustus(input_file, species, output_file):
-    """
+    """ Executes AUGUSTUS to predict genes in the input
+        genome.
+
+        Parameters
+        ----------
+        input_file : str
+            Path to the input FASTA file with genome contigs.
+        species : str
+            Identifier of the species passed to choose
+            prediction model used by AUGUSTUS.
+        output_file : str
+            Path to the output file that will store stdout
+            from AUGUSTUS.
     """
 
     out_handle = open(output_file, 'w')
@@ -310,14 +367,19 @@ def execute_augustus(input_file, species, output_file):
 def make_blast_db(input_fasta, output_path, db_type):
     """ Creates a BLAST database.
 
-        Args:
-            input_fasta (str): path to the input file with sequences.
-            output_path (str): path to the output database.
-            db_type (str): type of the database, nucleotide (nuc) or
+        Parameters
+        ----------
+        input_fasta : str
+            Path to the input file with sequences.
+        output_path : str
+            Path to the output database.
+        db_type : str
+            Type of the database, nucleotide (nuc) or
             protein (prot).
 
-        Returns:
-            Creates a BLAST database with the input sequences.
+        Returns
+        -------
+        Creates a BLAST database with the input sequences.
     """
 
     blastdb_cmd = ['makeblastdb', '-in', input_fasta, '-out', output_path,
@@ -335,7 +397,31 @@ def make_blast_db(input_fasta, output_path, db_type):
 
 def run_blast(blastp_path, blast_db, fasta_file, blast_output,
               max_hsps=1, threads=1, ids_file=None):
-    """
+    """ Runs BLASTp.
+
+        Parameters
+        ----------
+        blastp_path : str
+            Path to BLASTp executables.
+        blast_db : str
+            Path to the BLASTdb to use.
+        fasta_file : str
+            Path to the FASTA file that will be passed as query.
+        blast_output : str
+            Path to the file that will store the results.
+        max_hsp : int
+            Maximum number o High Scoring Pairs to determine when
+            comparing each query/subject.
+        threads : int
+            Number of threads to use to run BLASTp.
+        ids_file : str
+            Path to a file with a set of identifiers for the
+            sequences that should be used as subjects.
+
+        Returns
+        -------
+        stderr : str
+            String with information about any errors that ocurred.
     """
 
     blast_args = [blastp_path, '-db', blast_db, '-query', fasta_file,
@@ -356,14 +442,17 @@ def run_blast(blastp_path, blast_db, fasta_file, blast_output,
 
 
 def read_blast_tabular(blast_tabular_file):
-    """ Read a file with BLAST results in tabular format
+    """ Read a file with BLAST results in tabular format.
 
-        Args:
-            blast_tabular_file (str): path to output file of BLAST.
+        Parameters
+        ----------
+        blast_tabular_file : str
+            Path to output file of BLAST.
 
-        Returns:
-            blasting_results (list): a list with a sublist per line
-            in the input file.
+        Returns
+        -------
+        blasting_results : list
+            A list with a sublist per line in the input file.
     """
 
     with open(blast_tabular_file, 'r') as blastout:
@@ -374,7 +463,24 @@ def read_blast_tabular(blast_tabular_file):
 
 
 def apply_bsr(inputs):
-    """
+    """ Computes the BSR value for each alignment in a list of
+        alignments and selects or excludes sequence identifers
+        based on BSR value and sequence length.
+
+        Parameters
+        ----------
+        inputs : list
+            A list with the following elements:
+                - Path to the file with BLASTp results.
+                - Path to the FASTA file with sequences that were
+                  aligned.
+                - BSR value used as threshold.
+
+        Returns
+        -------
+        excluded_alleles : list
+            A list with the identifiers of the sequences that were
+            excluded based on the BSR threshold and length values.
     """
 
     blast_file = inputs[0]
@@ -424,14 +530,21 @@ def apply_bsr(inputs):
     return excluded_alleles
 
 
-def main(input_file, output_path, species, bsr):
+def main(input_file, output_path, species, bsr, threads):
+
+    print('\n{0}\n{1}\n{0}'.format('-'*9, ' euTyper'))
 
     start_date = dt.datetime.now()
     start_date_str = dt.datetime.strftime(start_date, '%Y-%m-%dT%H:%M:%S')
     print('\nStarted at: {0}\n'.format(start_date_str))
 
+    print('Number of genomes/assemblies: {0}'.format(1))
+    print('Species: {0}'.format(species))
+    print('BLAST Score Ratio: {0}'.format(bsr))
+    print('Number of threads: {0}'.format(threads))
+
     augustus_outfile = os.path.join(output_path, 'augustus_results.gff')
-    print('Running AUGUSTUS...')
+    print('\nRunning AUGUSTUS...')
     exit_code = execute_augustus(input_file, species, augustus_outfile)
     if exit_code != 0:
         sys.exit('AUGUSTUS returned exit code != 0. Exited.')
@@ -524,7 +637,7 @@ def main(input_file, output_path, species, bsr):
     # align proteins with BLASTp
     blast_output = os.path.join(output_path, 'blastout.tsv')
     blasterr = run_blast('blastp', blastdb, proteins_file, blast_output,
-                         max_hsps=1, threads=1, ids_file=None)
+                         max_hsps=1, threads=threads, ids_file=None)
 
     # index FASTA file with DNA sequences
     indexed_fasta = SeqIO.index(dna_file, 'fasta')
@@ -593,15 +706,19 @@ def parse_arguments():
     parser.add_argument('--bsr', type=float, required=False,
                         default=0.6, dest='bsr',
                         help='')
+    
+    parser.add_argument('--t', type=int, required=False,
+                        default=1, dest='threads',
+                        help='')
 
     args = parser.parse_args()
 
     return [args.input_files, args.output_path, args.species,
-            args.bsr]
+            args.bsr, args.threads]
 
 
 if __name__ == '__main__':
 
     args = parse_arguments()
 
-    main(args[0], args[1], args[2], args[3])
+    main(args[0], args[1], args[2], args[3], args[4])
