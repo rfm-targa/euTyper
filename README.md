@@ -12,7 +12,6 @@ Python >= 3.7
 [BioPython](https://github.com/biopython/biopython)  
 [Augustus](https://github.com/Gaius-Augustus/Augustus)  
 [BLAST](https://www.ncbi.nlm.nih.gov/books/NBK279671/)
-
 [Parallel](https://www.howtoinstall.me/ubuntu/18-04/parallel/)
 
 ## Usage
