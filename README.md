@@ -27,7 +27,7 @@ Python >= 3.7
 ```
 
 ## example commant with test files
-``
+```
 python3 euTyper_non_perl.py -i /path/to/your/favourite/directory/containing/genomes -o /output/folder/path/of/directory/be/created/and/files/stored -s /path/to/sample_metadata --t 30 --p 0.0
 
-``
+```
