@@ -22,13 +22,42 @@ Python >= 3.7
                 genome.
 -o OUTPUT_PATH  Path to the directory that will store output files created
                 by the process.
--s SPECIES      Species identifier passed to AUGUSTUS.
+-s sample_metadata path to samplemetadata (TSV file containing fastafile name, species, codon number.
 --bsr BSR       BLAST Score Ratio value used as threshold.
 --t THREADS     Number of threads used by BLASTp to align translated genes.
+--p probabbility probability change of a gene found by Augsustus, used as an cutoff
+
+
+### exstra functionality for flexibility and not needing to rerun euTyper witht the smalles changes
+#### add loci
+--add_loci path path to fasta file containing the CDS of each gene in it. This parameters enables to directly add genes to a folder containing all genes
+--codon Required codon table number to calculate the AA sequence of the CDS
+--force Forces the genes from the add_loci parameter to be directly added to the clustering dir (genes will have a forced prefix)
+-o OUTPUT_PATH  Path to the directory that will store output files created
+                by the process.
+                
+#### add genomes
+--add_gene path to directory containing the fastafiles of genomes to be added to processed genomes
+-s sample_metadata path to samplemetadata (TSV file containing fastafile name, species, codon number.
+-o OUTPUT_PATH  Path to the directory that will store output files created
+                by the process.
+-recluster If recluster = True, after adding the gene, all known genes will be directly evaluated by Clustering and blasting to retrieve the 
+--bsr BSR       BLAST Score Ratio value used as threshold.
+--t THREADS     Number of threads used by BLASTp to align translated genes.
+--p probabbility probability change of a gene found by Augsustus, used as an cutoff
+
 ```
 
 ## example commant with test files
 ```
-python3 euTyper_non_perl.py -i /path/to/your/favourite/directory/containing/genomes -o /output/folder/path/of/directory/be/created/and/files/stored -s /path/to/sample_metadata --t 30 --p 0.0
+### normal run
+python3 euTyper_non_perl.py -i /path/to/your/favourite/directory/containing/genomes -o /output/folder/path/of/directory/be/created/and/files/stored -s /path/to/sample_metadata --t 30 --p 0.9
+
+### incase euTyper already ran, and some adjustments are required
+### add loci directly to scheme seed
+python3 euTyper_non_perl.py -add_loci /path/to/your/favourite/directory/containing/genes -o --t 30 --codon 12 --forced True
+
+### If genome to list of genes
+python3 euTyper_non_perl.py -add_gene /path/to/your/favourite/directory/containing/genomes -o /output/folder/path/of/directory/be/created/and/files/stored -s /path/to/sample_metadata --t 30 --p 0.7 -recluster True
 
 ```
