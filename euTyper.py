@@ -3288,8 +3288,7 @@ def retrieve_all_sample_sequences(output_path, scheme_blast):
                 else:
                     seqs = seqs +line.rstrip()
                     hit_gene = True
-
-
+            sequentions[gID] = seqs
 
     with open(os.path.join(scheme_blast,'all_cds'),'w') as f:
             for id,seq in sequentions.items():
@@ -3724,6 +3723,7 @@ def retrieve_all_DNA(path_to_CDS_AA):
                 else:
                     seq = seq + line.rstrip()
                     DNA = True
+            CDS[ID] = seq
 
     return(CDS)
 
@@ -4698,8 +4698,8 @@ def generate_mlst(output_path, orphans, cpu_cores, BSRn=0.8):
             # check if there are still orphans#
             ###################################
             orphans_names = retrieve_orpahns(blast_results_dir, BSRn, sequentions, fasta_path)
-            if orphans_names:
-                new_scheme_seed_path = update_scheme_seed(new_clusters, output_path,fasta_files_path)
+            #if orphans_names:
+            #    new_scheme_seed_path = update_scheme_seed(new_clusters, output_path,fasta_files_path)
     
     
 
