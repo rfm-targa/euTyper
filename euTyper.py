@@ -388,7 +388,7 @@ def execute_augustus(sample_information, threads, output_path, pt_to_input_folde
         split_Mfasta(sample_path, temp_dir_split, sample)
 
     files = os.listdir(temp_dir_split)
-    
+
     #put the execute augustus and the preparation in a while loop. in if , while a list is entered which if full
     #it will put out True. so lowe the code the list files will be updated with files who has not been processed.
     #so in my case with conda, somethimes it can not find the augustus dir *weird bug. but with this am i sure it will produce something
@@ -400,7 +400,11 @@ def execute_augustus(sample_information, threads, output_path, pt_to_input_folde
         os.system("parallel -j "+ str(threads) +" --bar --no-notice ' ./{}' < job.lst")
 
 
-        files_created = (os.listdir(temp_dir_2))
+        tmp_files_created = (os.listdir(temp_dir_2))
+        files_created = []
+        for file in tmp_files_created:
+            file = (file.split('.gff'))[0]
+            files_created.append(file)
         files = list(set(files) - set(files_created))
         if files:
             print('{0} files have not been properly been inspected by augustus\n will check again,'
