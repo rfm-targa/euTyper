@@ -70,3 +70,11 @@ python3 euTyper.py -add_gene /path/to/your/favourite/directory/containing/genome
 ### generating the scheme seed again from already processed genes
 ```
 python3 euTyper.py --reclyster -o  /output/folder/path/of/directory/be/created/and/files/stored --t 20
+```
+
+### adding already processed augustus files
+
+```
+python3 euTyper.py -o /output/folder/path/of/directory/be/created/and/files/stored --t 30 -s /path/to/sample_metadata -i //path/to/your/favourite/directory/containing/genomes --p 0.5 --re_use_augustus /work/directory/of/already/processed/euTyper
+```
+
