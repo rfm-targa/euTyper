@@ -386,9 +386,8 @@ def execute_augustus(sample_information, threads, output_path, pt_to_input_folde
 
     print('Preparing fasta files for parralelisation')
     # split all fasta fies:
-    for sample in sample_information:
-        sample_path = os.path.join(pt_to_input_folder, sample)
-        split_Mfasta(sample_path, temp_dir_split, sample)
+    split_mfasta_parralel(sample_information, threads, temp_dir_split,pt_to_input_folder)
+
 
     files = os.listdir(temp_dir_split)
 
@@ -483,7 +482,19 @@ def create_augustus_job_lists(files, temp_dir_split, temp_dir, sample_informatio
 
     return (temp_dir_augustus_output, files_created)
 
-def split_Mfasta(sample_path,temp_dir_split, sample):
+def split_mfasta_parralel(sample_information,threads,temp_dir_split, pt_to_input_folder):
+        #do this parralel becouse with +20 gneomes it takes unnecary long
+
+        common_args = [temp_dir_split ,split_Mfasta]
+        cluster_inputs = [[os.path.join(pt_to_input_folder, sample)
+                              ,sample,  *common_args] for sample in sample_information]
+
+        # cluster proteins in parallel
+        trimm_stats = map_async_parallelizer(cluster_inputs,
+                                             function_helper,
+                                             threads)
+
+def split_Mfasta(sample_path, sample, temp_dir_split):
     '''split the fasta files into their contigs
     which allows for optimized parralelisation of Augustus
 
@@ -769,16 +780,18 @@ def copy_previous_augustus_results(re_use_augustus_path,output_path,threads):
 ######################################################
     print('start copying splitted fasta files')
     ###################################################
+
+    #the while loop is as fall net incase the copying has a hickup *which causes missing keys in dict later on
     while splitted_fasta_files:
         common_args = [temp_dir,re_use_augustus_path,'1_splitted_fasta',copy_file_parralel]
         files_to_be_copied = [[f, *common_args] for f in splitted_fasta_files]
-    
+
         # cluster proteins in parallel
         data = map_async_parallelizer(files_to_be_copied,
                                                     function_helper,
                                                     threads)
         print('')
-        
+
         files_copied = os.listdir(os.path.join(temp_dir,'1_splitted_fasta'))
         for element in files_copied:
             if element in splitted_fasta_files:
@@ -789,7 +802,7 @@ def copy_previous_augustus_results(re_use_augustus_path,output_path,threads):
     while augustus_output_files:
         common_args = [temp_dir, re_use_augustus_path, '2_augustus_output', copy_file_parralel]
         files_to_be_copied = [[f, *common_args] for f in augustus_output_files]
-    
+
         # cluster proteins in parallel
         data = map_async_parallelizer(files_to_be_copied,
                                       function_helper,
@@ -797,9 +810,9 @@ def copy_previous_augustus_results(re_use_augustus_path,output_path,threads):
         print('')
         files_copied = os.listdir(os.path.join(temp_dir, '2_augustus_output'))
         for element in files_copied:
-            if element in splitted_fasta_files:
+            if element in augustus_output_files:
                 augustus_output_files.remove(element)
-        
+
     return(temp_dir_2, temp_dir)
 ############
 # universal#
@@ -1402,6 +1415,16 @@ def edit_files(tmp_output, sample_information, output_path):
             os.rename(os.path.join(CDS_AA,file),os.path.join(CDS_AA,file_new))
 
     return (sample_information)
+
+def generate_sample_metadata(output_path, path_input,species=None,codontable_nr=1):
+
+    #get output folder (one previous then input dir
+    output = os.path.join(output_path,'sample_metadata_generated.tsv')
+    files = os.listdir(path_input)
+
+    with open(output,'w') as f:
+        for file in files:
+            f.write('{0}\t{1}\t{2}\n'.format(file,species,codontable_nr))
 
 
 ##############
@@ -3368,8 +3391,8 @@ def Create_fasta_for_blast(output_path, beta_file,location):
     seqs = {}
     scheme_seeds = os.listdir(os.path.join(output_path,location))
     count = 0
-    try:
-        for file in scheme_seeds:
+    for file in scheme_seeds:
+        try:
             if file != 'short':
                 with open(os.path.join(output_path,location,file),'r') as f:
                     count += 1
@@ -3381,8 +3404,8 @@ def Create_fasta_for_blast(output_path, beta_file,location):
                             CDS = CDS + line.rstrip()
 
                     seqs['CDS_{0}'.format(count)] = [org_ID, CDS]
-    except:
-        print('unable to open file "{0}", this is probabily a directory'.format(file))
+        except:
+            print('unable to open file "{0}", this is probabily a directory'.format(file))
 
     ###########################################
     # write out fasta file to create Blast DB #
@@ -4088,7 +4111,7 @@ def Create_MLST_scheme(self_scores, CDS, ID_seq, blast_results_path,BSRn,output_
                 blast_results[line[0]].append(line)
 
     #generate statistics dict
-    items = ['EXC','INF',"ANF","PANF",'ASM',"ALM","LNF","NIPH","singlets"]
+    items = ['EXC','INF',"ANF","PANF",'ASM',"ALM","LNF","NIPH","NIPHEM","singlets"]
     statistics = dict.fromkeys(items,0)
 
     genome_statistics = {i:deepcopy(statistics) for i in genomes}
@@ -4104,16 +4127,16 @@ def Create_MLST_scheme(self_scores, CDS, ID_seq, blast_results_path,BSRn,output_
     genome_old ="k"
     for k, v in blast_results.items():
         genome = (k.split('_', 1)[1])
-
         if len(v) == 1:
                 BSR_score = (float((v[0][2]))) / float(self_scores[v[0][1]])
-                if BSR_score >= BSRn:
+                if BSR_score >= BSRn and BSR_score <= MBSRn:
                     #decide weither EXC or INF
                     if(CDS[v[0][1]]) == (CDS[v[0][0]]):
                         genome_statistics[genome]['EXC'] += 1
                     else:
                         genome_statistics[genome]['INF'] += 1
                     gene_assigned_to_loci[k] = v[0][1]
+                    
 
 
                 #asigining LNF when loci is nog found, should not happen with orphan clustering
@@ -4128,40 +4151,35 @@ def Create_MLST_scheme(self_scores, CDS, ID_seq, blast_results_path,BSRn,output_
 
                 for i in v:
                     BSR_score = (float((i[2]))) / float(self_scores[i[1]])
-                    if BSR_score >= BSRn:
+                    if BSR_score >= BSRn and BSR_score <= MBSRn:
                         tmp_hits.append(i)
 
-                #when a allele have a blast hit on multiple lopxi above BSRn
+                #when a allele have a blast hit on multiple loci above BSRn
                 #hits will be evaluated by idenity and query coverage with multiplying
                 #best score is the one with the highest hit
                 if len(tmp_hits) != 1:
-                    genome_statistics[genome]['NIPH'] += 1
-
                     tmp_dict = {}
+
                     for i in tmp_hits:
                         times = float(i[3]) * float(i[4])
                         tmp_dict[times] = i
+
+
                     tmp_hits = []
                     tmp_hits.append(list((tmp_dict[(max(tmp_dict))])))
 
                     if len(tmp_hits) != 1:
-                        print("something is serious wrong with the allele calling algorithm\nplease contact authors")
+                        print("something is serious wrong with the allele calling algorithm\nplease contact authors\n"
+                              "This could also occour when there has been tempering with the schemeseed directory")
                         exit()
-
                     gene_assigned_to_loci[k] = tmp_hits[0][1]
-
                     if(CDS[tmp_hits[0][1]]) == (CDS[tmp_hits[0][0]]):
                         genome_statistics[genome]['EXC'] += 1
                     else:
                         genome_statistics[genome]['INF'] += 1
 
-
-
-
                 else:
                     gene_assigned_to_loci[k] = tmp_hits[0][1]
-                    diff = (len(CDS[k])) / (len(CDS[tmp_hits[0][1]]))
-
                     if(CDS[tmp_hits[0][1]]) == (CDS[tmp_hits[0][0]]):
                         genome_statistics[genome]['EXC'] += 1
                     else:
@@ -4391,7 +4409,26 @@ def edit_scheme(genome_statistics, loci_scheme, ID_seq, CDS, output_dir, order=T
         for i in (value.items()):
             TMP_dic[locus][i[0]] = {}
             TMP_dic[locus][i[0]]['old_seq_id'] = i[1]
-            id_name[i[1]] = i[0]
+
+            #some loci seeds have a , to solve bug if else statement
+            if i[1] != None:
+                if ',' in i[1]:
+                    TMP_seqs = []
+                    #append NIPH becouse paralogous hits
+                    genome_statistics[i[0]]['NIPH'] += 1
+                    ii = i[1].split(',')
+                    for iii in ii:
+                        TMP_seqs.append(seq_id[int(iii)])
+                        id_name[iii]=i[0]
+
+                    a_set = set(TMP_seqs)
+                    if len(a_set) != len(TMP_seqs):
+                        genome_statistics[i[0]]['NIPHEM'] += 1
+                else:
+                    id_name[i[1]] = i[0]
+            else:
+                id_name[i[1]] = i[0]
+                genome_statistics[(i[0])]["ANF"] += 1
             # assign a new seq_id
             # if seq id(old) is already in dic then it will be skipped.
             # this generates per locus a dic of old ID and new ones
@@ -4417,7 +4454,6 @@ def edit_scheme(genome_statistics, loci_scheme, ID_seq, CDS, output_dir, order=T
                 else:
                     TMP_seq_ID[i[1]] = {}
                     TMP_seq_ID[i[1]]['ID'] = 'ANF'
-                    genome_statistics[(i[0])]["ANF"] += 1
 
                 # create a TMP dictionary to look up data later in code
                 if i[1] != None:
@@ -4479,11 +4515,14 @@ def edit_scheme(genome_statistics, loci_scheme, ID_seq, CDS, output_dir, order=T
 
         for k, v in TMP_seq_ID.items():
             if v['seq'] != None:
+
                 diff = len(v['seq']) / int(median) * 100
+
                 if diff >= 120.0:
                     genome_statistics[(id_name[k])]["ALM"] += 1
                 elif diff <= 80.0:
                     genome_statistics[(id_name[k])]["ASM"] += 1
+
 
         # assign locus ID to Dict
         TMP_seq_ID[None] = {}
@@ -4514,12 +4553,13 @@ def edit_scheme(genome_statistics, loci_scheme, ID_seq, CDS, output_dir, order=T
                     f.write((TMP_seq_ID[i]['seq'] + '\n'))
 
     MLST_scheme = pd.DataFrame(new_scheme)
-
+    MLST_scheme = MLST_scheme.transpose()
     ########################
     # exstra calculations #
     ########################
     columns = (MLST_scheme.columns)
     rows = list(MLST_scheme.index)
+
     ##########################
     # add ANF count ad each column
     # ########################################
@@ -4529,39 +4569,41 @@ def edit_scheme(genome_statistics, loci_scheme, ID_seq, CDS, output_dir, order=T
     # generate dict
     ANF_DIC = {}
     ANF_DIC['sum_ANF'] = {}
-    for column in columns:
+    for row in rows:
         ANF_counter = 0
-        for data in (MLST_scheme[column]):
+        for data in (MLST_scheme.loc[row]):
             if data == "ANF":
                 ANF_counter += 1
-        ANF_DIC['sum_ANF'][column] = ANF_counter
+
+        ANF_DIC['sum_ANF'][row] = ANF_counter
 
     # add dataframe to previous one. transpose is to switch column and rownames to make it fit
-    ANF_scheme = pd.DataFrame(ANF_DIC).transpose()
-    MLST_scheme = MLST_scheme.append(ANF_scheme)
+    ANF_DIC = (pd.DataFrame(ANF_DIC))
+    MLST_scheme = MLST_scheme.join(ANF_DIC['sum_ANF'])
+
 
     #################################
     # order MLST scheme#
     ########################
     order_scheme = {}
     if order:
-        for column in columns:
-            if (MLST_scheme[column]['sum_ANF']) not in order_scheme.keys():
-                order_scheme[(MLST_scheme[column]['sum_ANF'])] = []
-            order_scheme[(MLST_scheme[column]['sum_ANF'])].append(column)
+        for row in rows:
+            if (MLST_scheme['sum_ANF'][row]) not in order_scheme.keys():
+                order_scheme[(MLST_scheme['sum_ANF'][row])] = []
+            order_scheme[(MLST_scheme['sum_ANF'][row])].append(row)
 
-    order_sum_anf = []
-    for number in (sorted(order_scheme.keys())):
-        for locus_ID in order_scheme[number]:
-            order_sum_anf.append(locus_ID)
+        order_sum_anf = []
+        for number in (sorted(order_scheme.keys())):
+            for locus_ID in order_scheme[number]:
+                order_sum_anf.append(locus_ID)
 
-    MLST_scheme = MLST_scheme.reindex(columns=order_sum_anf)
+        MLST_scheme = MLST_scheme.reindex(order_sum_anf)
 
     ##################################
     # add ANF % column at dataframe#
     ################################
     print('start calculating % ANF and % consersive genes')
-    max_loci = len(columns)
+    max_loci = len(rows)
     perc_ANF = {}
     total = 0
     for i in genome_statistics.keys():
@@ -4570,39 +4612,65 @@ def edit_scheme(genome_statistics, loci_scheme, ID_seq, CDS, output_dir, order=T
         genome_statistics[i]['PANF'] = percentage
         total += percentage
     perc_ANF['sum_Ang'] = total
-    MLST_scheme.insert(0, 'percentage_ANF', perc_ANF.values())
+
+    MLST_scheme.loc["percentage of ANF"] =(perc_ANF.values())
+
 
     #####################
     # calculate singlets#
     #####################
 
-    for column in columns:
-        # shows only columns who have only one allele
-        if (MLST_scheme[column]['sum_ANF'] == (len(rows)) - 1):
-            for row in (MLST_scheme[column]).items():
-                if row[1] != 'ANF' and row[1] != (len(rows)) - 1:
-                    genome_statistics[row[0]]['singlets'] += 1
+    #generate dataframe containing only the singlets
+    signlets = MLST_scheme.loc[MLST_scheme['sum_ANF'] == (len(columns)) - 1]
+
+    for index, row in signlets.iterrows():
+        for column in columns:
+            if row[column] == (1):
+                genome_statistics[column]['singlets'] +=1
+
+
 
     #############################
     # calculate amount of different alleles#
     #############################
     N_alleles = {}
-    N_alleles['N_allele'] = {}
+    N_alleles['number of different alleles'] = {}
 
-    for column in columns:
+    for index, row in MLST_scheme.iterrows():
         Tmp_list = []
-        for row in (MLST_scheme[column].items()):
-            if 'ANF' != row[1] and row[1] not in Tmp_list and row[0] != 'sum_ANF':
-                Tmp_list.append(row[1])
+        for item in row:
+            #to remove the ANF amount
+            if '.' not in str(item) and 'ANF' not in str(item):
+                if item not in Tmp_list:
+                    Tmp_list.append(item)
+        N_alleles['number of different alleles'][index] = len(Tmp_list)
 
-        N_alleles['N_allele'][column] = (len(Tmp_list))
+    N_alleles = pd.DataFrame(N_alleles)
+    MLST_scheme = MLST_scheme.join(N_alleles['number of different alleles'])
 
-    N_alleles = pd.DataFrame(N_alleles).transpose()
+    ##############
+    # order index#
+    ##############
+    if order:
+        order_sum_anf.insert(0,"percentage of ANF")
+        MLST_scheme = MLST_scheme.reindex((order_sum_anf))
 
+    else:
+        rows.insert(0,"percentage of ANF")
+        MLST_scheme = MLST_scheme.reindex((rows))
 
-    MLST_scheme = MLST_scheme.append(N_alleles)
+    ################
+    # order columns#
+    ################
+    columns = list(columns)
+    columns.insert(0, 'number of different alleles')
+    columns.insert(0, 'sum_ANF')
+
+    MLST_scheme = MLST_scheme.reindex(columns=columns)
     statistics = (pd.DataFrame(genome_statistics).transpose())
 
+    print(MLST_scheme)
+    print(statistics)
     return(MLST_scheme,statistics,dir,locus_dir)
 
 def safe_scheme_statistics(MLST_scheme,statistics , wg_mlst_path):
@@ -4621,11 +4689,20 @@ def safe_scheme_statistics(MLST_scheme,statistics , wg_mlst_path):
     :return:
     '''
     print('writing statistics and wg_MLST scheme out to TSV and xlsx format')
-    MLST_scheme.to_csv(os.path.join(wg_mlst_path,'wg_MLST.tsv'),sep='\t')
-    statistics.to_csv(os.path.join(wg_mlst_path,'statistics.tsv'),sep='\t')
 
-    MLST_scheme.to_excel(os.path.join(wg_mlst_path, 'wg_MLST.xlsx'))
-    statistics.to_excel(os.path.join(wg_mlst_path, 'statistics.xlsx'))
+    #switch rows to columns becouse max rows is 104857 and col is 16384 which is easily exceeded
+    try:
+        MLST_scheme.to_excel(os.path.join(wg_mlst_path, 'wg_MLST.xlsx'))
+        MLST_scheme.to_csv(os.path.join(wg_mlst_path,'wg_MLST.tsv'),sep='\t')
+    except:
+        MLST_scheme.to_csv(os.path.join(wg_mlst_path,'wg_MLST.tsv'),sep='\t')
+        print("unable to write to CSV")
+    try:
+        statistics.to_excel(os.path.join(wg_mlst_path, 'statistics.xlsx'))
+        statistics.to_csv(os.path.join(wg_mlst_path,'statistics.tsv'),sep='\t')
+    except:
+        statistics.to_csv(os.path.join(wg_mlst_path,'statistics.tsv'),sep='\t')
+
 
 ##################
 # Main functions #
@@ -4633,6 +4710,7 @@ def safe_scheme_statistics(MLST_scheme,statistics , wg_mlst_path):
 
 
 def parse_arguments():
+
     '''
     Parse all arguments
     :return:
@@ -4710,6 +4788,22 @@ def parse_arguments():
                         dest='sample_metadata_input',
                         help='')
 
+
+    ##########################
+    # generate MLST functions#
+    ##########################
+    parser.add_argument('--gSMD', type=bool, required=False,
+                        default=False, dest='gSMD',
+                        help='')
+
+
+    parser.add_argument('--species', type=str, required=False,
+                        default='None', dest='species',
+                        help='')
+
+    parser.add_argument('--codon_nr', type=int, required=False,
+                        default=1, dest='codon_nr',
+                        help='')
     #######################################################################
     # optional ( increase --t is highly adivised) must make Thread checker#
     #######################################################################
@@ -4782,6 +4876,10 @@ def parse_arguments():
                         help='reuse augustus copy the augustus results of an other directory'
                              ' where it is already processed, with this the processing of augustus is skipped')
 
+    # -- intra_filter = 0.9
+    parser.add_argument('--BSRn', type=float, required=False,
+                        default=0.8, dest='BSRn',
+                        help='BSR cutoff for blasting nucleotides')
     args = parser.parse_args()
 
 
@@ -4800,7 +4898,8 @@ def parse_arguments():
             , args.window_size, args.clustering_sim,
             args.Kmer_offset, args.seq_num_cluster, args.file_prefix,
             args.representative_filter, args.intra_filter, args.add_loci, args.force,
-            args.codon, args.add_gene, args.recluster, args.gMLST,args.orphans, args.reuse_augustus_path]
+            args.codon, args.add_gene, args.recluster, args.gMLST,args.orphans, args.reuse_augustus_path, args.BSRn
+            ,args.species,args.codon_nr, args.gSMD]
 
 def check_arguments(args):
     """ Checks the given parameters so far if it is in the right format.
@@ -4815,17 +4914,23 @@ def check_arguments(args):
     input_data_files_sample_metadata = []
 
     availeble_codon_table =[1,2,3,4,5,6,9,10,11,12,13,14,16,21,22,23,24,25,26,27,28,29,30,30,31,33]
-    accepted_formats =['fna','fasta']
+    accepted_formats =['fna','fasta','fa']
 
 
     #######################
     # Checking  requirements#
     #######################
 
+    if args[25]:
+
+        if args[25] not in availeble_codon_table:
+            print("codon table nr {0} is not in available tables please check input or notify the developers".format(args[25]))
+            exit()
+
     #############################
     # check the --add_loci modus#
     #############################
-    if args[15] != 'false':
+    elif args[15] != 'false':
 
         if not (os.path.isfile(args[15])):
                 print('add_loci path doesnt lead to a file')
@@ -4938,7 +5043,6 @@ def check_arguments(args):
     #######################
     # Generate MLST scheme#
     #######################
-
     elif args[20]:
 
         if not os.path.isdir(args[1]):
@@ -4949,7 +5053,7 @@ def check_arguments(args):
     # check reuse augustus#
     #########################
 
-    if args[22] != 'false':
+    elif args[22] != 'false':
 
         if  os.path.isdir(args[22]):
             path1 = os.path.join(args[22],'temp','2_augustus_output')
@@ -5364,7 +5468,7 @@ def create_schema_structure(schema_seed_fasta, output_directory,
 
     return schema_files
 
-def generate_mlst(output_path, orphans, cpu_cores, BSRn=0.8, distinct_loci = True):
+def generate_mlst(output_path, orphans, cpu_cores, BSRn, distinct_loci = True):
 
     print('start producing MLST scheme from current set of loci and genes in work directory')
     ####################
@@ -5507,9 +5611,7 @@ def generate_mlst(output_path, orphans, cpu_cores, BSRn=0.8, distinct_loci = Tru
     blast_locus = None
     custom_blast_locus_db = None
     print(wg_mlst_path)
-    import pickle
 
-    MLST_scheme.to_pickle('MLST_SCHEME')
     #if blast_locus:
         #Blast_loci(wg_mlst_path, MLST_scheme, locus_dir)
 
@@ -5549,11 +5651,19 @@ def main(args):
     gMLST = args[20]
     orphans = args[21]
     re_use_augustus_path = args[22]
-
+    BSRn = args[23]
+    species = args[24]
+    codon_nr = args[25]
+    gMSD = args[26]
     ###########
     # add_loci#
     ###########
-    if add_loci_path != 'false':
+
+    if gMSD:
+        #generate sample meta data for lazy people like me
+        generate_sample_metadata(output_path,path_to_input_folder, species, codon_nr)
+
+    elif add_loci_path != 'false':
 
         start_date = dt.datetime.now()
         start_date_str = dt.datetime.strftime(start_date, '%Y-%m-%dT%H:%M:%S')
@@ -5625,7 +5735,7 @@ def main(args):
     # generate MLST scheme#
     ######################
     elif gMLST:
-        generate_mlst(output_path, orphans, threads, BSRn=0.8)
+        generate_mlst(output_path, orphans, threads, BSRn)
 
 
     #########
@@ -5639,11 +5749,15 @@ def main(args):
         start_date = dt.datetime.now()
         start_date_str = dt.datetime.strftime(start_date, '%Y-%m-%dT%H:%M:%S')
         print('\nStarted at: {0}\n'.format(start_date_str))
+        sample_information = retrieve_sample_data(sample_metadata_path)
 
-        print('Number of genomes/assemblies: {0}'.format( len(os.listdir(path_to_input_folder))))
+        print('Number of genomes/assemblies: {0}'.format( len(sample_information)))
         print('data will be stored at: {0}'.format(args[1]))
 
         print('BLAST Score Ratio: {0}'.format(args[3]))
+        print('BLAST Score Ratio nucleotides: {0}'.format(BSRn))
+        print('Augustus probabillity cutoff: {0}'.format(prob))
+
         print('Number of threads: {0}'.format(threads))
 
         # generating output folder if required
@@ -5651,7 +5765,6 @@ def main(args):
             os.makedirs(output_path)
 
         #retrieve the sample names from sample metadata
-        sample_information = retrieve_sample_data(sample_metadata_path)
         ######################################
         # start preprocessing all input files#
         ######################################
@@ -5666,7 +5779,7 @@ def main(args):
 
         # print message about schema that was created
 
-        generate_mlst(output_path, orphans, threads, BSRn=0.8)
+        generate_mlst(output_path, orphans, threads, BSRn)
         end_date = dt.datetime.now()
         end_date_str = dt.datetime.strftime(end_date, '%Y-%m-%dT%H:%M:%S')
 
@@ -5674,7 +5787,7 @@ def main(args):
         minutes, seconds = divmod(delta.total_seconds(), 60)
 
         print('\nFinished at: {0}'.format(end_date_str))
-        print('Created schema with {0} genes based on {1} genome in'
+        print('Created schema with {0} loci based on {1} genome in'
               '{2: .0f}m{3: .0f}s.'.format(len(results[0]), len(sample_information),
                                            minutes, seconds))
 
