@@ -4554,125 +4554,160 @@ def edit_scheme(genome_statistics, loci_scheme, ID_seq, CDS, output_dir, order=T
 
     MLST_scheme = pd.DataFrame(new_scheme)
     MLST_scheme = MLST_scheme.transpose()
-    ########################
-    # exstra calculations #
-    ########################
-    columns = (MLST_scheme.columns)
-    rows = list(MLST_scheme.index)
 
-    ##########################
-    # add ANF count ad each column
-    # ########################################
+    return(MLST_scheme,genome_statistics,dir,locus_dir)
 
-    print('start calculating ANF (allele not found) and organising based on results')
-    # generate count of ANF and inmport in dataframe
-    # generate dict
-    ANF_DIC = {}
-    ANF_DIC['sum_ANF'] = {}
-    for row in rows:
-        ANF_counter = 0
-        for data in (MLST_scheme.loc[row]):
-            if data == "ANF":
-                ANF_counter += 1
+def statistics_ordering_mlst_scheme(MLST_scheme, genome_statistics, order):
+        columns = (MLST_scheme.columns)
+        rows = list(MLST_scheme.index)
 
-        ANF_DIC['sum_ANF'][row] = ANF_counter
+        ##########################
+        # add ANF count ad each column
+        # ########################################
 
-    # add dataframe to previous one. transpose is to switch column and rownames to make it fit
-    ANF_DIC = (pd.DataFrame(ANF_DIC))
-    MLST_scheme = MLST_scheme.join(ANF_DIC['sum_ANF'])
-
-
-    #################################
-    # order MLST scheme#
-    ########################
-    order_scheme = {}
-    if order:
+        print('start calculating ANF (allele not found) and organising based on results')
+        # generate count of ANF and inmport in dataframe
+        # generate dict
+        ANF_DIC = {}
+        ANF_DIC['sum_ANF'] = {}
         for row in rows:
-            if (MLST_scheme['sum_ANF'][row]) not in order_scheme.keys():
-                order_scheme[(MLST_scheme['sum_ANF'][row])] = []
-            order_scheme[(MLST_scheme['sum_ANF'][row])].append(row)
+            ANF_counter = 0
+            for data in (MLST_scheme.loc[row]):
+                if data == "ANF":
+                    ANF_counter += 1
 
-        order_sum_anf = []
-        for number in (sorted(order_scheme.keys())):
-            for locus_ID in order_scheme[number]:
-                order_sum_anf.append(locus_ID)
+            ANF_DIC['sum_ANF'][row] = ANF_counter
 
-        MLST_scheme = MLST_scheme.reindex(order_sum_anf)
-
-    ##################################
-    # add ANF % column at dataframe#
-    ################################
-    print('start calculating % ANF and % consersive genes')
-    max_loci = len(rows)
-    perc_ANF = {}
-    total = 0
-    for i in genome_statistics.keys():
-        percentage = genome_statistics[i]['ANF'] / max_loci * 100
-        perc_ANF[i] = percentage
-        genome_statistics[i]['PANF'] = percentage
-        total += percentage
-    perc_ANF['sum_Ang'] = total
-
-    MLST_scheme.loc["percentage of ANF"] =(perc_ANF.values())
+        # add dataframe to previous one. transpose is to switch column and rownames to make it fit
+        ANF_DIC = (pd.DataFrame(ANF_DIC))
+        MLST_scheme = MLST_scheme.join(ANF_DIC['sum_ANF'])
 
 
-    #####################
-    # calculate singlets#
-    #####################
+        #################################
+        # order MLST scheme#
+        ########################
+        order_scheme = {}
+        if order:
+            for row in rows:
+                if (MLST_scheme['sum_ANF'][row]) not in order_scheme.keys():
+                    order_scheme[(MLST_scheme['sum_ANF'][row])] = []
+                order_scheme[(MLST_scheme['sum_ANF'][row])].append(row)
 
-    #generate dataframe containing only the singlets
-    signlets = MLST_scheme.loc[MLST_scheme['sum_ANF'] == (len(columns)) - 1]
+            order_sum_anf = []
+            for number in (sorted(order_scheme.keys())):
+                for locus_ID in order_scheme[number]:
+                    order_sum_anf.append(locus_ID)
 
-    for index, row in signlets.iterrows():
-        for column in columns:
-            if row[column] == (1):
-                genome_statistics[column]['singlets'] +=1
+            MLST_scheme = MLST_scheme.reindex(order_sum_anf)
+
+        ##################################
+        # add ANF % column at dataframe#
+        ################################
+        print('start calculating % ANF and % consersive genes')
+        max_loci = len(rows)
+        perc_ANF = {}
+        total = 0
+        for i in genome_statistics.keys():
+            percentage = genome_statistics[i]['ANF'] / max_loci * 100
+            perc_ANF[i] = percentage
+            genome_statistics[i]['PANF'] = percentage
+            total += percentage
+        perc_ANF['sum_Ang'] = total
+
+        MLST_scheme.loc["percentage of ANF"] =(perc_ANF.values())
+
+
+        #####################
+        # calculate singlets#
+        #####################
+
+        #generate dataframe containing only the singlets
+        signlets = MLST_scheme.loc[MLST_scheme['sum_ANF'] == (len(columns)) - 1]
+
+        for index, row in signlets.iterrows():
+            for column in columns:
+                if row[column] == (1):
+                    genome_statistics[column]['singlets'] +=1
 
 
 
-    #############################
-    # calculate amount of different alleles#
-    #############################
-    N_alleles = {}
-    N_alleles['number of different alleles'] = {}
+        #############################
+        # calculate amount of different alleles#
+        #############################
+        N_alleles = {}
+        N_alleles['number of different alleles'] = {}
 
-    for index, row in MLST_scheme.iterrows():
-        Tmp_list = []
-        for item in row:
-            #to remove the ANF amount
-            if '.' not in str(item) and 'ANF' not in str(item):
-                if item not in Tmp_list:
-                    Tmp_list.append(item)
-        N_alleles['number of different alleles'][index] = len(Tmp_list)
+        for index, row in MLST_scheme.iterrows():
+            Tmp_list = []
+            for item in row:
+                #to remove the ANF amount
+                if '.' not in str(item) and 'ANF' not in str(item):
+                    if item not in Tmp_list:
+                        Tmp_list.append(item)
+            N_alleles['number of different alleles'][index] = len(Tmp_list)
 
-    N_alleles = pd.DataFrame(N_alleles)
-    MLST_scheme = MLST_scheme.join(N_alleles['number of different alleles'])
+        N_alleles = pd.DataFrame(N_alleles)
+        MLST_scheme = MLST_scheme.join(N_alleles['number of different alleles'])
 
-    ##############
-    # order index#
-    ##############
-    if order:
-        order_sum_anf.insert(0,"percentage of ANF")
-        MLST_scheme = MLST_scheme.reindex((order_sum_anf))
+        ##############
+        # order index#
+        ##############
+        if order:
+            order_sum_anf.insert(0,"percentage of ANF")
+            MLST_scheme = MLST_scheme.reindex((order_sum_anf))
 
-    else:
-        rows.insert(0,"percentage of ANF")
-        MLST_scheme = MLST_scheme.reindex((rows))
+        else:
+            rows.insert(0,"percentage of ANF")
+            MLST_scheme = MLST_scheme.reindex((rows))
 
-    ################
-    # order columns#
-    ################
-    columns = list(columns)
-    columns.insert(0, 'number of different alleles')
-    columns.insert(0, 'sum_ANF')
+        ################
+        # order columns#
+        ################
+        columns = list(columns)
+        columns.insert(0, 'number of different alleles')
+        columns.insert(0, 'sum_ANF')
 
-    MLST_scheme = MLST_scheme.reindex(columns=columns)
-    statistics = (pd.DataFrame(genome_statistics).transpose())
+        MLST_scheme = MLST_scheme.reindex(columns=columns)
+        statistics = (pd.DataFrame(genome_statistics).transpose())
 
-    print(MLST_scheme)
-    print(statistics)
-    return(MLST_scheme,statistics,dir,locus_dir)
+        return(MLST_scheme,statistics)
 
+def remove_columns(scheme):
+
+    # remove unnecary allelels.
+    # should be editied for cg and wg genome but try except statements should always work
+    try:
+        del scheme['sum_ANF']
+    except:
+        print("")
+    try:
+        del scheme['number of different alleles']
+    except:
+        print("")
+
+    try:
+        scheme = scheme.drop(index='percentage of ANF', axis=0)
+    except:
+        print("")
+
+    return (scheme)
+
+def convert_scheme_to_binary(scheme):
+
+    #convert all paralous hit who contain a , to 1 as debug or else will be seen as ANF
+
+    print(scheme)
+    scheme = scheme.replace({',':'.'},regex=True)
+    # covnert all non numertic (ANF) to 0
+    print(scheme)
+    scheme = scheme.apply(pd.to_numeric, errors='coerce').fillna(0)
+    # every number equal or higher then 1.0 will be changed to 1.0
+    scheme[scheme >= 1.0] = 1.0
+    # convert back to int
+    scheme = scheme.astype(int)
+    print(scheme)
+
+    return(scheme)
 def safe_scheme_statistics(MLST_scheme,statistics , wg_mlst_path):
 
     '''
@@ -4692,6 +4727,7 @@ def safe_scheme_statistics(MLST_scheme,statistics , wg_mlst_path):
 
     #switch rows to columns becouse max rows is 104857 and col is 16384 which is easily exceeded
     try:
+        MLST_scheme.to_pickle(os.path.join(wg_mlst_path, 'wg_MLST.pck'))
         MLST_scheme.to_excel(os.path.join(wg_mlst_path, 'wg_MLST.xlsx'))
         MLST_scheme.to_csv(os.path.join(wg_mlst_path,'wg_MLST.tsv'),sep='\t')
     except:
@@ -4703,7 +4739,156 @@ def safe_scheme_statistics(MLST_scheme,statistics , wg_mlst_path):
     except:
         statistics.to_csv(os.path.join(wg_mlst_path,'statistics.tsv'),sep='\t')
 
+    #create Binary file
+    scheme = remove_columns(MLST_scheme)
+    scheme = convert_scheme_to_binary(scheme)
+    scheme.to_csv(os.path.join(wg_mlst_path, 'wg_mlst_binary.tsv'), sep='\t')
 
+def sum_anf_stats(scheme,output_path):
+    #get scheme as dict per row
+    scheme = (scheme.to_dict(orient='records'))
+    Sum_ANF_count = {}
+    #used to skip the percentage anf row
+    percentage_anf_to_be_skipped = True
+    for k in scheme:
+        if percentage_anf_to_be_skipped == True:
+            percentage_anf_to_be_skipped = False
+            continue
+
+        for name,value in k.items():
+            #retrieve sumAnf
+            if name == 'sum_ANF':
+                sum_ANF = value
+            elif name != 'number of different alleles':
+                #generate dictionary
+                if name not in Sum_ANF_count.keys():
+                    Sum_ANF_count[name] = {}
+                if value != "ANF":
+                    if sum_ANF not in Sum_ANF_count[name].keys():
+                        Sum_ANF_count[name][sum_ANF] = 1
+                    else:
+                        Sum_ANF_count[name][sum_ANF] += 1
+
+    Sum_ANF_count = pd.DataFrame(Sum_ANF_count)
+    Sum_ANF_count = Sum_ANF_count.fillna(0)
+    Sum_ANF_count.to_csv(os.path.join(output_path, 'sum_ANF_count.tsv'), sep='\t')
+
+def generate_statistics_format_for_R(path):
+    splitted_fasta_path = os.path.join(path, 'temp', '1_splitted_fasta')
+    splitted_augustus_path = os.path.join(path, 'temp', '2_augustus_output')
+    files_path = os.path.join(path,'CDS_AA')
+    #####amount of contigs####
+    ####lewngt of contig and total#
+    #################################
+    files = os.listdir(files_path)
+    data = {}
+    for file in files:
+
+        file1 = os.path.join(files_path, file)
+        with open(file1) as f:
+            contig = 0
+            Tnucleotides = 0
+            length_a_contig = []
+            contig_start = False
+            for line in f:
+
+                if ">" in line:
+                    if contig_start:
+                        length_a_contig.append(length_contig)
+
+                    contig += 1
+                    length_contig = 0
+                    contig_start = False
+                else:
+                    Tnucleotides += len(line)
+                    length_contig += len(line)
+                    contig_start = True
+
+            length_a_contig.append(length_contig)
+        file2 = os.path.join(path, 'CDS_AA', ((file.rsplit('.', 1)[0]) + '.fna_CDS'))
+        with open(file2) as f:
+            CDS = 0
+            for line in f:
+                if ">" in line:
+                    CDS += 1
+        data[file] = {'Ncontig': contig, "total_length": Tnucleotides, "lengths_per_contig": length_a_contig,
+                      'total_genes': CDS}
+
+    df = pd.DataFrame(data)
+    output_path = os.path.join(path, 'contic_overview.tsv')
+    df.to_csv(output_path, sep='\t')
+
+    lengths_per_contig = dict.fromkeys(data.keys())
+    for i in data.keys():
+        contigs = sorted(data[i]['lengths_per_contig'])
+        for a in sorted(range(len(contigs))):
+            if a == 0:
+                continue
+            lengths_per_contig[i] = {a: None}
+        items = ''
+        counter = 0
+        for f in contigs:
+            counter += 1
+            lengths_per_contig[i][counter] = f
+            # items = items + str(f) + '\t'
+
+        # out.write((i+'\t'+items+'\n'))
+
+    df = pd.DataFrame((lengths_per_contig))
+    output_path = os.path.join(path, 'statistics_contig_lengths.tsv')
+    df.to_csv(output_path, sep='\t')
+
+    #################################
+    # get amount of genes per contig#
+    #################################
+
+    # GCA_005768625.2_ASM576862v2_genomic.fna_split_10.fa.gff
+    # GCA_003069565.1_ASM306956v1_genomic.fna_split_7.fa
+
+    # get list of which files belong together
+    files = os.listdir(splitted_fasta_path)
+    contig_genes = {}
+    for file in files:
+        file_name = file.split('.')[0]
+
+        if file_name not in contig_genes.keys():
+            contig_genes[file_name] = []
+        contig_genes[file_name].append(file)
+
+    # get max number of contig for dataframe
+    genes_per_contig = {}
+    max_contig_n = []
+    for k in contig_genes.keys():
+        max_contig_n.append(len(contig_genes[k]))
+
+    max_contig = max(max_contig_n)
+
+    # create dic for datagrame
+    for k in contig_genes.keys():
+        for a in sorted(range(max_contig)):
+            if a == 0:
+                continue
+            genes_per_contig[k] = {a: None}
+
+        items = contig_genes[k]
+        items = sorted(items)
+        counter = 0
+        for file in items:
+            counter += 1
+            # print(contig_length)
+            with open(os.path.join(splitted_augustus_path, (file + '.gff'))) as f:
+                genes = 0
+                for line in f:
+                    if 'gene' in line and not '#' in line:
+                        line = line.split('\t')
+                        if float(line[5]) >= 0.8:
+                            genes += 1
+
+            genes_per_contig[k][counter] = genes
+
+    df = pd.DataFrame((genes_per_contig))
+    output_path = os.path.join(path, 'statistics_Ngenes_per_contig.tsv')
+    df.to_csv(output_path, sep='\t')
 ##################
 # Main functions #
 ##################
@@ -5611,11 +5796,12 @@ def generate_mlst(output_path, orphans, cpu_cores, BSRn, distinct_loci = True):
     blast_locus = None
     custom_blast_locus_db = None
     print(wg_mlst_path)
+    MLST_scheme, statistics = statistics_ordering_mlst_scheme(MLST_scheme, genome_statistics, order=True)
 
     #if blast_locus:
         #Blast_loci(wg_mlst_path, MLST_scheme, locus_dir)
 
-
+    sum_anf_stats(MLST_scheme, wg_mlst_path)
     safe_scheme_statistics(MLST_scheme,statistics , wg_mlst_path)
 
 
@@ -5736,6 +5922,8 @@ def main(args):
     ######################
     elif gMLST:
         generate_mlst(output_path, orphans, threads, BSRn)
+        #generate some statistical info for R graphing
+        generate_statistics_format_for_R(output_path)
 
 
     #########
@@ -5780,6 +5968,8 @@ def main(args):
         # print message about schema that was created
 
         generate_mlst(output_path, orphans, threads, BSRn)
+        #generate some statistical info for R graphing
+        generate_statistics_format_for_R(output_path)
         end_date = dt.datetime.now()
         end_date_str = dt.datetime.strftime(end_date, '%Y-%m-%dT%H:%M:%S')
 
