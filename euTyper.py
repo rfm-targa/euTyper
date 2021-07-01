@@ -21,37 +21,39 @@ import subprocess
 from Bio import SeqIO
 import csv
 from Bio.SeqIO import FastaIO
-import shutil
 from copy import deepcopy
 import pandas as pd
 import shutil
 import collections
 import time
 import os
-import statistics
+import glob
+
 
 #################
 # Pre Processing#
 #################
 
 def retrieve_sample_data(sample_metadata_path):
-    """ Retrieve file names from sample metadata.
+    '''
+        Retrieve file names from sample name, species and codon table number
+        put them in a dictionary for easy access.
 
-        Parameters
-        ----------
-        - path to sample meta data
+    :param sample_metadata_path: str
+        path to sample metadata
+    :return:
+        Dict
+            sample_name: species,codontab;e
+    '''
 
-        Returns: list of sample names (genomes / assemblies)
-    """
     sample_information = {}
 
     with open(sample_metadata_path) as file:
         for line in file:
             line = line.rstrip().split('\t')
-            sample_information[line[0]] = (line[1],line[2])
+            sample_information[line[0]] = (line[1], line[2])
 
-    return(sample_information)
-
+    return (sample_information)
 def reverse_complement(dna_sequence):
     """ Determines the reverse complement of a given DNA strand.
 
@@ -84,7 +86,6 @@ def reverse_complement(dna_sequence):
     reverse_complement_strand = reverse_str(complement_strand)
 
     return reverse_complement_strand
-
 def check_str_alphabet(string, alphabet):
     """ Determine if a string only has characters from specified
         alphabet.
@@ -109,7 +110,6 @@ def check_str_alphabet(string, alphabet):
         return True
     else:
         return 'ambiguous or invalid characters'
-
 def check_str_multiple(string, number):
     """ Determine if length of input string is multiple of
         a specified number.
@@ -133,7 +133,6 @@ def check_str_multiple(string, number):
         return True
     else:
         return 'sequence length is not a multiple of {0}'.format(number)
-
 def translate_dna_aux(dna_sequence, method, table_id):
     """ Tries to translate an input DNA sequence in specified orientation
         and stores exceptions when the input sequence cannot be translated.
@@ -190,7 +189,6 @@ def translate_dna_aux(dna_sequence, method, table_id):
             return argh
 
     return [protseq, myseq]
-
 def retranslate(sequence, method, table_id, strands, exception_collector):
     """ Sends sequence for translation and collects exceptions when
         the sequence cannot be translated.
@@ -235,7 +233,6 @@ def retranslate(sequence, method, table_id, strands, exception_collector):
                                                      translated_seq.args[0]))
 
     return [translated_seq, exception_collector]
-
 def reverse_str(string):
     """ Reverses character order in input string.
 
@@ -253,7 +250,6 @@ def reverse_str(string):
     revstr = string[::-1]
 
     return revstr
-
 def translate_dna(dna_sequence, table_id, min_len):
     """ Checks if sequence is valid and attempts to translate it,
         calling several functions to ensure that the sequence only has
@@ -330,7 +326,6 @@ def translate_dna(dna_sequence, table_id, min_len):
     else:
         exception_str = ','.join(exception_collector)
         return exception_str
-
 def translate_sequence(dna_str, table_id):
     """ Translate a DNA sequence using the BioPython package.
 
@@ -352,15 +347,17 @@ def translate_sequence(dna_str, table_id):
     protseq = Seq.translate(myseq_obj, table=table_id, cds=True)
 
     return protseq
-
 def execute_augustus(sample_information, threads, output_path, pt_to_input_folder):
     """ Executes AUGUSTUS to predict genes in the input
-        genome.
+        genome., this is done by:
+        1: splitting the fasta file on contigs
+        2: generating an joblist.sh
+        3: excecuting the joblist & augustus
 
         Parameters
         ----------
-        input_file : str
-            Path to sample metadata containing required data.
+        sampple_information : str
+            Dictionary containing the sample metadata of each sample.
         Threads : int
             amount of CPU the augustus parralelisation is allowed to use.
         output_file : str
@@ -377,49 +374,63 @@ def execute_augustus(sample_information, threads, output_path, pt_to_input_folde
     # preparing for parralisation to reduce computing time#
     #######################################################
 
-    temp_dir = os.path.join(output_path,'temp')
+    # creates temporaty directory if it didnt exist yet
+    temp_dir = os.path.join(output_path, 'temp')
     os.makedirs(temp_dir, exist_ok=True)
-    
-    temp_dir_split = os.path.join(temp_dir,'1_splitted_fasta')
-    os.makedirs(temp_dir_split, exist_ok=True)
 
+    # creates directory in temp dir for the splitted fasta files
+    temp_dir_split = os.path.join(temp_dir, '1_splitted_fasta')
+    os.makedirs(temp_dir_split, exist_ok=True)
 
     print('Preparing fasta files for parralelisation')
     # split all fasta fies:
-    split_mfasta_parralel(sample_information, threads, temp_dir_split,pt_to_input_folder)
-
-
+    split_mfasta_parralel(sample_information, threads, temp_dir_split, pt_to_input_folder)
+    print('')
+    # find the files who has been generated for job list creation
     files = os.listdir(temp_dir_split)
 
-    #put the execute augustus and the preparation in a while loop. in if , while a list is entered which if full
-    #it will put out True. so lowe the code the list files will be updated with files who has not been processed.
-    #so in my case with conda, somethimes it can not find the augustus dir *weird bug. but with this am i sure it will produce something
+    # put the execute augustus and the preparation in a while loop. in if , while a list is entered which if full
+    # it will put out True. so lowe the code the list files will be updated with files who has not been processed.
+    # so in my case with conda, somethimes it can not find the augustus dir *weird bug. but with this am i sure it will produce something
     while files:
 
         # create Augustus job list
         temp_dir_2, file_to_delete = create_augustus_job_lists(files, temp_dir_split, temp_dir, sample_information)
         print('Start performing Augustus parralel')
-        os.system("parallel -j "+ str(threads) +" --bar --no-notice ' ./{}' < job.lst")
+        # run the augustus parralelisation
+        # (maybe should implement a nice version, aka not eating up all the CPU but if in fight will give it )
+        os.system("parallel -j " + str(threads) + " --bar --no-notice ' ./{}' < job.lst")
 
+        ######################################################################
+        # this part is created to check weither augustus did his job properly#
+        # somethimes with conda it cant find augusuts                        #
+        # unproccesed files will be kept                                     #
+        ######################################################################
 
         tmp_files_created = (os.listdir(temp_dir_2))
         files_created = []
+        # find the names who has been processed by Augustus
         for file in tmp_files_created:
             file = (file.split('.gff'))[0]
             files_created.append(file)
+        # remove files who has been created from the files variable
         files = list(set(files) - set(files_created))
         if files:
             print('{0} files have not been properly been inspected by augustus\n will check again,'
-                  '\n if same error message keep popping up, please be sure augustus works prior using euTyper'.format(len(files)))
-        #delete files
+                  '\n if same error message keep popping up, please be sure augustus works prior using euTyper'.format(
+                len(files)))
+        # delete files
         for file in file_to_delete:
             os.remove(file)
 
-    return(temp_dir_2, temp_dir)
-
+    return (temp_dir_2, temp_dir)
 def create_augustus_job_lists(files, temp_dir_split, temp_dir, sample_information):
     '''
-    create augustus job lists to enable paralelisation
+    create augustus job lists to enable paralelisation.
+    - creates job for each splitted fasta file
+    - creates a master job list
+    - gives right to job lists to be performed
+
 
     Parameters
     ----------
@@ -443,60 +454,80 @@ def create_augustus_job_lists(files, temp_dir_split, temp_dir, sample_informatio
     files: list
     list with files who are created
     '''
+
+    # initialise a few items
     files_created = []
     count = 0
     files = sorted(files)
-    temp_dir_augustus_output = os.path.join(temp_dir,'2_augustus_output')
+    # create output directory
+    temp_dir_augustus_output = os.path.join(temp_dir, '2_augustus_output')
     os.makedirs(temp_dir_augustus_output, exist_ok=True)
+    # generates a job file for each splitted fasta file
     for file in list(files):
-            try:
-                count +=1
-                species = sample_information[(file.split('_split_'))[0]][0]
-                augcall = 'augustus --species=' + species + ' --gff3=on  --stopCodonExcludedFromCDS=false --strand=both --genemodel=complete --noInFrameStop=true'
-                job_name = (('Augustus_job_' +str(count) + '_' + file[:-3])).replace('.','_')
-                input_file = os.path.join(temp_dir_split,file)
-                output_file = os.path.join(temp_dir_augustus_output,(file +'.gff'))
-                errfile = os.path.join(temp_dir_augustus_output, (file + '.err'))
+        try:
+            # Augcall is the import factor giving the parameters to augustus
+            count += 1
+            species = sample_information[(file.split('_split_'))[0]][0]
+            augcall = 'augustus --species=' + species + ' --gff3=on  --stopCodonExcludedFromCDS=false --strand=both --genemodel=complete --noInFrameStop=true'
+            job_name = (('Augustus_job_' + str(count) + '_' + file[:-3])).replace('.', '_')
+            input_file = os.path.join(temp_dir_split, file)
+            output_file = os.path.join(temp_dir_augustus_output, (file + '.gff'))
+            errfile = os.path.join(temp_dir_augustus_output, (file + '.err'))
 
-                with open(job_name,'w+') as f:
-                    f.write('#\n')
-                    f.write((augcall + ' ' + input_file + ' --outfile=' + output_file +' --errfile=' + errfile))
+            with open(job_name, 'w+') as f:
+                f.write('#\n')
+                f.write((augcall + ' ' + input_file + ' --outfile=' + output_file + ' --errfile=' + errfile))
 
-                    files_created.append(job_name)
+                files_created.append(job_name)
+        # todo find a way to resolve this error, some fastafile has unlogical contig names (occourd only once yet)
+        except:
+            print('##################################')
+            print('sample {0} could not be found in the sample meta data \n'
+                  'this is probably due contig/scaffold name change in fasta file'.format(file))
+            print('####################################')
 
-            except:
-                print('##################################')
-                print('sample {0} could not be found in the sample meta data \n'
-                      'this is probably due contig/scaffold name change in fasta file'.format(file))
-                print('####################################')
-
+    # give the rights to the joblist to be able to be performed
     for file in files_created:
         os.system("chmod +x {0}".format(file))
 
-
+    # generate the general joblist
     with open('job.lst', 'w') as f:
         for file in files_created:
-            f.write((file) +'\n')
+            f.write((file) + '\n')
 
     files_created.append('job.lst')
 
     return (temp_dir_augustus_output, files_created)
+def split_mfasta_parralel(sample_information, threads, temp_dir_split, pt_to_input_folder):
+    '''
+    prepared the splitting of fasta files parralel.
 
-def split_mfasta_parralel(sample_information,threads,temp_dir_split, pt_to_input_folder):
-        #do this parralel becouse with +20 gneomes it takes unnecary long
+    :param sample_information: DICT
+        dictionary containing the sample_name (key), and species and codon table number as values
+    :param threads: int
+        Amount of CPU the algorithmis allowed to use
+    :param temp_dir_split: str
+        path to where the splitted files will be stored in the temporary directory
+    :param pt_to_input_folder:
+        path were the genome assemblies are stored
+    :return:
+        NA(parralelisation, augustus result file in tmp dir)
+    '''
+    # do this parralel becouse with +20 gneomes it takes unnecary long
 
-        common_args = [temp_dir_split ,split_Mfasta]
-        cluster_inputs = [[os.path.join(pt_to_input_folder, sample)
-                              ,sample,  *common_args] for sample in sample_information]
+    common_args = [temp_dir_split, split_Mfasta]
+    cluster_inputs = [[os.path.join(pt_to_input_folder, sample)
+                          , sample, *common_args] for sample in sample_information]
 
-        # cluster proteins in parallel
-        trimm_stats = map_async_parallelizer(cluster_inputs,
-                                             function_helper,
-                                             threads)
-
+    # cluster proteins in parallel
+    trimm_stats = map_async_parallelizer(cluster_inputs,
+                                         function_helper,
+                                         threads)
 def split_Mfasta(sample_path, sample, temp_dir_split):
-    '''split the fasta files into their contigs
+    '''
+    split the fasta files into their contigs
     which allows for optimized parralelisation of Augustus
+    every subfile gets the name of their master file and a number
 
     sample path: str
         path to directory containing the fasta files
@@ -509,7 +540,7 @@ def split_Mfasta(sample_path, sample, temp_dir_split):
 
     :return
     ----------
-    NA
+    generates splitted fastafile on contigs on the temp_dir_split path
 
 
     '''
@@ -521,15 +552,252 @@ def split_Mfasta(sample_path, sample, temp_dir_split):
             if '>' in line:
                 if file:
                     fasta_out.close()
-                count +=1
-                out = os.path.join(temp_dir_split,(sample + "_split_" + str(count) +'.fa'))
-                fasta_out = open(out,'w')
+                count += 1
+                out = os.path.join(temp_dir_split, (sample + "_split_" + str(count) + '.fa'))
+                fasta_out = open(out, 'w')
                 fasta_out.write(line)
                 file = True
             else:
                 fasta_out.write(line)
+def find_master_child_files(names, files):
+    '''
+    this function find the children files to corospond to the assembly.
 
-def retrieve_CDS_AA_from_augustus(temp_dir_2, sample_information ,temp_dir, output_path, prob):
+    :param names: list
+        name of the assemblies
+    :param files: list
+        files who are generated by Augustus
+    :return:
+        dict:
+        assembly name : [children files]
+    '''
+    combo = {}
+
+    # find the files beloning to each other and skip the error files
+    for name in names:
+        combo[name] = []
+        for file in files:
+            if name != file and name in file and file[-3:] != 'err':
+                combo[name].append(file)
+
+    # sort list to prevent reassigning segID
+    for key in combo.keys():
+        list_files = combo[key]
+        combo[key] = sorted(list_files)
+
+    return (combo)
+def read_in_augustus_results(augustus_path, file, genes, gene_id, prob):
+    '''
+    Reads in the augustus files
+
+    :param augustus_path: str
+        directory where the splitted the augustus files are
+
+    :param file: str
+        file name to be read in
+
+    :param genes: dic
+        dictonariy where gene cordinations are stored
+
+    :param gene_id: int
+        gene number (will be used multiple times if a master fasta file contain more contigs)
+    :param prob: float
+        minium required probability score (default = 0.0)
+
+    :return:
+        gene_id: int
+            gene number (will be used multiple times if a master fasta file contain more contigs)
+        genes: dict
+            gene_id: CDS coordinations
+    '''
+    # import AUGUSTUS results
+    with open(os.path.join(augustus_path, file), 'r') as af:
+        augustus_lines = af.readlines()
+
+        # start getting genes
+        # Filter genes on overall probabillity check.
+        # at start gene, proabillity = false. when overall gene probabillity is above cutoff it will be True
+        # CDS will be only noted down when probabillity is above cutoff
+        for l in augustus_lines:
+            if '# start gene' in l:
+                probabillity_check = False
+
+            # add proabillity score to filter later by
+            elif 'gene' in l and '#' not in l and float((l.split('\t'))[5]) >= prob:
+                gene_id += 1
+                genes[gene_id] = []
+                probabillity_check = True
+
+
+            # the last value is the codon phase information this information
+            # does not mean that we should discard 0, 1 or 2 bases from the
+            # start of the sequence. It means that 0, 1 or 2 bases of the sequence
+            # will complete the last codon from the previous CDS and the first complete
+            # codon of the new CDS only starts after those initial bases.
+            # So, a CDS might not have length that is a multiple of 3 and will not
+            # end in a complete codon. We need to concatenate all gene CDSs to obtain
+            # the full sequence that can be translated.
+
+            # get cds sequences for each gene
+            # import input genomes
+            elif 'CDS' in l and '#' not in l and probabillity_check:
+                cds_line = l.split('\t')
+                genes[gene_id].append((cds_line[0], cds_line[2],
+                                       cds_line[3], cds_line[4],
+                                       cds_line[6], cds_line[7]))
+
+        return (gene_id, genes)
+def exstract_augustus_results(genes, temp_dir, file):
+    '''
+    exstract the CDS from the splitted fasta file, from the CDS coordinations
+    - corrects for strand
+
+    :param genes: dict
+        gene_number: coordinations : strand
+
+    :param temp_dir: str
+        path of tmp directory
+
+    :param file: str
+        file name of the genes dict
+
+    :return:
+        gene_cds: Dict
+            gene number: CDS sequence, strand
+    '''
+    # read in splitted fasta file
+    chrs = {rec.id: str(rec.seq).upper()
+            for rec in SeqIO.parse((os.path.join(temp_dir, '1_splitted_fasta', file))[:-4], 'fasta')}
+
+    # exstract the CDS from the fasta file
+    gene_cds = {}
+    for gid, ginfo in genes.items():
+        cds_sequences = []
+        strands = []
+        for c in ginfo:
+            start = (int(c[2]) - 1)
+            end = int(c[3])
+            cds = chrs[c[0]][start:end]
+            if c[4] != '+':
+                cds = reverse_complement(cds)
+
+            cds_sequences.append(cds)
+            strands.append(c[4])
+
+        # make the dictionary for the CDS and strand
+        gene_cds[gid] = (cds_sequences, list(set(strands)))
+
+    return (gene_cds)
+def correct_orientation_translate(gene_cds, Mgid, sample_information, master_file):
+    '''
+    corrects the orientation and retrieves protein sequence
+    stores under gene number
+
+    :param gene_cds:dict
+        gene_number: cds, strand
+    :param Mgid: int
+        gene number
+    :param sample_information:dict
+        sample name: species, codontable number
+    :param master_file : str
+        file that is being exstracted and read
+
+    :return:
+        gene_dna_prot: dict
+            gene_number : CDS, protein sequention
+
+        Mgid int:
+            gene_number
+    '''
+    gene_dna_prot = {}
+    for gid, gcds in gene_cds.items():
+        Mgid += 1
+        strand = gcds[1]
+        if len(strand) == 1:
+            if strand[0] == '+':
+                dna_seq = ''.join(gcds[0])
+            elif strand[0] == '-':
+                dna_seq = ''.join(gcds[0][::-1])
+
+            prot_seq = translate_dna(dna_seq, (sample_information[master_file])[1], 0)
+            gene_dna_prot[Mgid] = [dna_seq, str(prot_seq[0][0])]
+        elif len(strand) > 1:
+            print("'{0}' strand is not recognised".format(gid))
+
+    return (gene_dna_prot, Mgid)
+def safe_CDS_protein_sequence(gene_dna_prot, temp_dir, file):
+    '''
+
+    safe down the CDS and protein sequence
+
+    :param gene_dna_prot: dict
+        gene_number: CDS, protein sequence
+    :param temp_dir: str
+        path to tmp dir
+    :param value: str
+        file name to safe the sequences under
+
+    :return:
+    NA
+    '''
+    # save DNA and Protein sequences to file
+    dna_records = ['>{0}\n{1}'.format(k, v[0])
+                   for k, v in gene_dna_prot.items()]
+
+    protein_records = ['>{0}\n{1}'.format(k, v[1])
+                       for k, v in gene_dna_prot.items()]
+
+    # create directory if it didnt exsist yet
+    os.makedirs(os.path.join(os.path.join(temp_dir, '3_splitted_fastas')), exist_ok=True)
+
+    # write down protein sequences to fasta format
+    proteins_file = os.path.join(os.path.join(temp_dir, '3_splitted_fastas'), (file + '_proteins.fasta'))
+    with open(proteins_file, 'w') as pf:
+        pf.write('\n'.join(protein_records))
+
+    # write down CDS to fasta format
+    dna_file = os.path.join(os.path.join(temp_dir, '3_splitted_fastas'), (file + '_dna.fasta'))
+    with open(dna_file, 'w') as df:
+        df.write('\n'.join(dna_records))
+def retrieve_CDS_AA_from_augustus(master_file, combo, temp_dir, splitted_fasta_dir, prob,
+                          sample_information):
+    '''
+    retrieves the CDS from the augustus files
+
+    :param master_file: str
+        assembly name
+    :param combo: dict
+        dictionary containing all the subfiles
+    :param temp_dir: str
+        path to temporary directory
+    :param splitted_fasta_dir: str
+        path where the splitted fasta files are stored
+    :param prob: float
+        minimal probabily score required for the gene to be seen valid (default = 0.0)
+    :param sample_information: dict
+        dictionary containing sample information assembly:[species, codon table number]
+    :return:
+        NA
+    '''
+    # for each splitted file beloning to master file
+    files = combo[master_file]
+    Mgid = 0
+    gene_id = 0
+
+    for file in files:
+        genes = {}
+
+        # read in the augustus file and retrieve the co"ordinations of CDS
+        gene_id, genes = read_in_augustus_results(splitted_fasta_dir, file, genes, gene_id, prob)
+        # exstract the CDS from the splitted fasta file
+        gene_cds = exstract_augustus_results(genes, temp_dir, file)
+        # join CDS sequences for each gene and translate
+        # must concatenate sequences in the right order and orientation
+        gene_dna_prot, Mgid = correct_orientation_translate(gene_cds, Mgid, sample_information, master_file)
+        # safe down the protein sequence and cds in TMP directory
+        safe_CDS_protein_sequence(gene_dna_prot, temp_dir, file)
+def retrieve_CDS_AA_from_augustus_parrallel(splitted_fasta_dir, sample_information, temp_dir, output_path, prob,
+                                            threads):
     '''
     retrieves the CDS and AA sequences generated from the augustus files.
     It will be stored to a dict with each gene identifier containing the CDS and AA sequence
@@ -561,191 +829,132 @@ def retrieve_CDS_AA_from_augustus(temp_dir_2, sample_information ,temp_dir, outp
     #############################################
     # key = splitted fa files
     # value is linked augustus file
-    files = os.listdir(temp_dir_2)
-    combo = {}
+    files = os.listdir(splitted_fasta_dir)
     names = sample_information.keys()
-    for name in names:
-        combo[name] = []
-        for file in files:
-            if name != file and name in file and file[-3:] != 'err':
-                combo[name].append(file)
 
+    # find the files belonging to each other
+    combo = find_master_child_files(names, files)
     print('Extracting CDSs from AUGUSTUS results and creating '
           'full gene sequences...')
+    os.makedirs(os.path.join(os.path.join(temp_dir, '3_splitted_fastas')), exist_ok=True)
 
-    # sort list to prevent reassigning segID
-    for key in combo.keys():
-        list_files = combo[key]
-        combo[key] = sorted(list_files)
-    ################################################
-    # retrieving CDS
-    ################################################
+    common_args = [combo, temp_dir, splitted_fasta_dir, prob, sample_information, retrieve_CDS_AA_from_augustus]
+    files_to_be_copied = [[master_file, *common_args] for master_file in combo.keys()]
 
-    for key in combo.keys():
-        Mgid = 0
-        gene_id = 0
-        files = combo[key]
-        for value in files:
-            genes = {}
-            # import input genomes
-            chrs = {rec.id: str(rec.seq).upper()
-                    for rec in SeqIO.parse((os.path.join(temp_dir, '1_splitted_fasta', value))[:-4], 'fasta')}
+    # cluster proteins in parallel
+    data = map_async_parallelizer(files_to_be_copied,
+                                  function_helper,
+                                  threads)
+    print('')
 
-            # import AUGUSTUS results
-            with open(os.path.join(temp_dir_2, value), 'r') as af:
-                augustus_lines = af.readlines()
-
-                # start getting genes
-                # Filter genes on overall probabillity check.
-                # at start gene, proabillity = false. when overall gene probabillity is above cutoff it will be True
-                # CDS will be only noted down when probabillity is above cutoff
-                for l in augustus_lines:
-                    if '# start gene' in l:
-                        probabillity_check = False
-
-                    # add proabillity score to filter later by
-                    elif 'gene' in l and '#' not in l and float((l.split('\t'))[5]) >= prob:
-                        gene_id += 1
-                        genes[gene_id] = []
-                        probabillity_check = True
-                    elif 'CDS' in l and '#' not in l and probabillity_check:
-                        cds_line = l.split('\t')
-                        genes[gene_id].append((cds_line[0], cds_line[2],
-                                               cds_line[3], cds_line[4],
-                                               cds_line[6], cds_line[7]))
-
-            # the last value is the codon phase information this information
-            # does not mean that we should discard 0, 1 or 2 bases from the
-            # start of the sequence. It means that 0, 1 or 2 bases of the sequence
-            # will complete the last codon from the previous CDS and the first complete
-            # codon of the new CDS only starts after those initial bases.
-            # So, a CDS might not have length that is a multiple of 3 and will not
-            # end in a complete codon. We need to concatenate all gene CDSs to obtain
-            # the full sequence that can be translated.
-
-            # get cds sequences for each gene
-
-            gene_cds = {}
-            for gid, ginfo in genes.items():
-                cds_sequences = []
-                strands = []
-                for c in ginfo:
-                    start = (int(c[2]) - 1)
-                    end = int(c[3])
-                    cds = chrs[c[0]][start:end]
-                    if c[4] != '+':
-                        cds = reverse_complement(cds)
-
-                    cds_sequences.append(cds)
-                    strands.append(c[4])
-
-                gene_cds[gid] = (cds_sequences, list(set(strands)))
-
-            # join CDS sequences for each gene and translate
-            # must concatenate sequences in the right order and orientation
-
-            gene_dna_prot = {}
-            for gid, gcds in gene_cds.items():
-                Mgid += 1
-                strand = gcds[1]
-                if len(strand) == 1:
-                    if strand[0] == '+':
-                        dna_seq = ''.join(gcds[0])
-                    elif strand[0] == '-':
-                        dna_seq = ''.join(gcds[0][::-1])
-
-
-                    prot_seq = translate_dna(dna_seq, (sample_information[key])[1] , 0)
-                    gene_dna_prot[Mgid] = [dna_seq, str(prot_seq[0][0])]
-                elif len(strand) > 1:
-                    print(gid)
-
-            # save DNA and Protein sequences to file
-            dna_records = ['>{0}\n{1}'.format(k, v[0])
-                           for k, v in gene_dna_prot.items()]
-
-            protein_records = ['>{0}\n{1}'.format(k, v[1])
-                               for k, v in gene_dna_prot.items()]
-
-            os.makedirs(os.path.join(os.path.join(temp_dir,'3_splitted_fastas')), exist_ok=True)
-
-            proteins_file = os.path.join(os.path.join(temp_dir,'3_splitted_fastas'), (value + '_proteins.fasta'))
-            with open(proteins_file, 'w') as pf:
-                pf.write('\n'.join(protein_records))
-
-            dna_file = os.path.join(os.path.join(temp_dir,'3_splitted_fastas'), (value + '_dna.fasta'))
-            with open(dna_file, 'w') as df:
-                df.write('\n'.join(dna_records))
-
-    return(os.path.join(temp_dir,'3_splitted_fastas'))
-
-def combine_fastas(path_to_tmp3, sample_information, output_path):
+    return (os.path.join(temp_dir, '3_splitted_fastas'))
+def find_and_sort_files_to_same_assembly(assembly, files):
     '''
+    sorts splitted fasta files in temporary directory on number and if it belongs to the assembly
 
-    combine all splitted fasta files beloning to the same species
-
-    parameters
-    ---------
-    :param path_to_tmp3: str
-        path to tmp directory where splitted fasta will be stored
-
-    :param sample_information: dict
-        dictornary containing the sample name, species and codon table nr.
-
-    :param output_path:
-        path to CDS_AA where all combined fasta file per species will be stored
-
+    :param assembly: str
+        file name of the assembly
+    :param files: list
+        all files in tmp directory containing the splitted fasta files
 
     :return:
-        path to CDS_AA directory
+
+        Proteins: list
+            fasta file to the assembly contiaining the splitted protein sequences
+        CDS: list
+            fasta file to the assembly containing the splitted CDS sequences
+    '''
+    proteins = []
+    CDS = []
+    for file in files:
+        if assembly in file and 'proteins' in file:
+            proteins.append(file)
+        elif assembly in file and 'dna' in file:
+            CDS.append(file)
+
+    # sorting algorithm do
+    proteins = sorted(proteins)
+    CDS = sorted(CDS)
+
+    return (proteins, CDS)
+def write_master_fasta_files(assembly, output_path, path_to_tmp3, sequence, suffix):
+    '''
+
+    :param assembly: str
+        assembly name as name to save
+    :param output_path: str
+        path to directory where to safe
+    :param path_to_tmp3: str
+        path to temporary directory 3
+    :param sequence: list
+        either protein or CDS sequences splitted fasta files
+    :param suffix: str
+        either _protein or _CDS
+
+    :return:
+        NA
+    '''
+    output = os.path.join(output_path, 'CDS_AA', (assembly + suffix))
+    with open(output, 'w') as f_out:
+        for file in sequence:
+            file = os.path.join(path_to_tmp3, file)
+            with open(file) as f:
+                for line in f:
+                    if "\n" in line:
+                        f_out.write((line))
+                    else:
+                        f_out.write((line + "\n"))
+def combine_fastas(assembly, files, output_path, path_to_tmp3):
+    '''
+    combines the splitted fasta file of the assembly to a single file
+    :param assembly: str
+        name of the assembly
+    :param files: list
+        list of all files in the splitted fasta file directory
+    :param output_path: str
+        general path to working directory
+    :param path_to_tmp3: str
+        path to the splitted fasta file directory
+    :return:
+        NA
+    '''
+
+    # find all files beloning to an assembly
+    proteins, CDS = find_and_sort_files_to_same_assembly(assembly, files)
+
+    # write out fasta file
+    write_master_fasta_files(assembly, output_path, path_to_tmp3, proteins, '_protein')
+    write_master_fasta_files(assembly, output_path, path_to_tmp3, CDS, '_CDS')
+def combine_fastas_parralel(path_to_tmp3, sample_information, output_path, threads):
+    '''
+        initiasier to run combine fastas parralel
+    - combine all splitted fasta files beloning to the same assembly
+
+    :param path_to_tmp3: str
+        path to tmp directory containing the splitted fasta file of the assembly
+    :param sample_information: dict
+        samplename:[species,codontable number]
+    :param output_path: str
+        path to working directory
+    :param threads: int
+        amount of CPU the algorithm is allowed to use
+    :return:
+        path to the CDS_AA directory
     '''
     print('Combining created fasta files')
     files = os.listdir(path_to_tmp3)
 
-    ###########################
-    # find corrosponding files#
-    ###########################
-    for key in sample_information.keys():
-        proteins = []
-        CDS = []
-        for file in files:
-            if key in file and 'proteins' in file:
-                proteins.append(file)
-            elif key in file and 'dna' in file:
-                CDS.append(file)
+    common_args = [files, output_path, path_to_tmp3, combine_fastas]
+    files_to_be_copied = [[assembly, *common_args] for assembly in sample_information.keys()]
 
-        # sorting algorithm do
-        proteins = sorted(proteins)
-        CDS = sorted(CDS)
-    ##########################
-    # combine the fasta files#
-    ##########################
+    # cluster proteins in parallel
+    data = map_async_parallelizer(files_to_be_copied,
+                                  function_helper,
+                                  threads)
+    print('')
 
-        output = os.path.join(output_path, 'CDS_AA', (key +'_protein'))
-        with open(output, 'w') as f_out:
-            for file in proteins:
-                file = os.path.join(path_to_tmp3,file)
-                with open(file) as f:
-                    for line in f:
-                        if "\n" in line:
-                            f_out.write((line))
-                        else:
-                            f_out.write((line + "\n"))
-
-        output = os.path.join(output_path, 'CDS_AA', (key +'_CDS'))
-        with open(output, 'w') as f_out:
-            for file in CDS:
-                file = os.path.join(path_to_tmp3,file)
-                with open(file) as f:
-                    for line in f:
-                        if "\n" in line:
-                            f_out.write((line))
-                        else:
-                            f_out.write((line + "\n"))
-
-    return(os.path.join(output_path, 'CDS_AA'))
-
-def copy_previous_augustus_results(re_use_augustus_path,output_path,threads):
+    return (os.path.join(output_path, 'CDS_AA'))
+def copy_previous_augustus_results(re_use_augustus_path, output_path, threads):
     '''
     to reduce computing time already processed fasta files by augsusts will be copied instead of running augustus
     this function is for when users wants to recalcuate with defferent settings
@@ -759,40 +968,37 @@ def copy_previous_augustus_results(re_use_augustus_path,output_path,threads):
         temp-dir_2 path to augustus files
         tmp dir patht o created tmp directory
     '''
-    #############
-    #create files#
-####################
+    #############################
+    # create directories if needed#
+    ##############################
     temp_dir = os.path.join(output_path, 'temp')
     os.makedirs(temp_dir, exist_ok=True)
 
+    temp_dir_2 = os.path.join(output_path, 'temp', '2_augustus_output')
+    os.makedirs(temp_dir_2, exist_ok=True)
+    os.makedirs(os.path.join(output_path, 'temp', '1_splitted_fasta'), exist_ok=True)
 
-    temp_dir_2 = os.path.join(output_path,'temp','2_augustus_output')
-    os.makedirs(temp_dir_2,exist_ok=True)
-    os.makedirs(os.path.join(output_path,'temp','1_splitted_fasta'),exist_ok=True)
+    # copy directories
+    # do this parralele becouse it other wise take to damn long time
 
-
-
-    #copy directories
-    #do this parralele becouse it other wise take to damn long time
-
-    augustus_output_files = os.listdir(os.path.join(re_use_augustus_path,'temp','2_augustus_output'))
-    splitted_fasta_files = os.listdir(os.path.join(re_use_augustus_path,'temp','1_splitted_fasta'))
-######################################################
+    augustus_output_files = os.listdir(os.path.join(re_use_augustus_path, 'temp', '2_augustus_output'))
+    splitted_fasta_files = os.listdir(os.path.join(re_use_augustus_path, 'temp', '1_splitted_fasta'))
+    ######################################################
     print('start copying splitted fasta files')
     ###################################################
 
-    #the while loop is as fall net incase the copying has a hickup *which causes missing keys in dict later on
+    # the while loop is as fall net incase the copying has a hickup *which causes missing keys in dict later on
     while splitted_fasta_files:
-        common_args = [temp_dir,re_use_augustus_path,'1_splitted_fasta',copy_file_parralel]
+        common_args = [temp_dir, re_use_augustus_path, '1_splitted_fasta', copy_file_parralel]
         files_to_be_copied = [[f, *common_args] for f in splitted_fasta_files]
 
         # cluster proteins in parallel
         data = map_async_parallelizer(files_to_be_copied,
-                                                    function_helper,
-                                                    threads)
+                                      function_helper,
+                                      threads)
         print('')
 
-        files_copied = os.listdir(os.path.join(temp_dir,'1_splitted_fasta'))
+        files_copied = os.listdir(os.path.join(temp_dir, '1_splitted_fasta'))
         for element in files_copied:
             if element in splitted_fasta_files:
                 splitted_fasta_files.remove(element)
@@ -813,64 +1019,7 @@ def copy_previous_augustus_results(re_use_augustus_path,output_path,threads):
             if element in augustus_output_files:
                 augustus_output_files.remove(element)
 
-    return(temp_dir_2, temp_dir)
-############
-# universal#
-############
-def copy_file_parralel(file, temp_dir,re_use_augustus_path,directory):
-
-
-    src= os.path.join(re_use_augustus_path,'temp',directory,file)
-    dest = os.path.join(temp_dir,directory,file)
-    shutil.copy(src,dest)
-
-
-def copytree(src, dst, symlinks=False, ignore=None):
-    '''
-    copy whole directory to another directory
-
-    :param src: str
-        path to directory to be copied
-    :param dst: str
-        path where directories will be copied too
-
-    :param symlinks: bool
-        should symlinks be copied
-
-    :param ignore: bool
-        should copying errors be ignored
-
-    :return:
-    '''
-    if not os.path.exists(dst):
-        os.makedirs(dst)
-    for item in os.listdir(src):
-        s = os.path.join(src, item)
-        d = os.path.join(dst, item)
-        if os.path.isdir(s):
-            copytree(s, d, symlinks, ignore)
-        else:
-            if not os.path.exists(d) or os.stat(s).st_mtime - os.stat(d).st_mtime > 1:
-                shutil.copy2(s, d)
-
-def replace_multiple_characters(input_string, replacements):
-    """ Replaces multiple characters in a string.
-        Parameters
-        ----------
-        input_string : str
-            String with characters to be replaced.
-        Returns
-        -------
-        replaced : str
-            Input string without replaced characters.
-    """
-
-    for r in replacements:
-        if r[0] in input_string:
-            input_string = input_string.replace(*r)
-
-    return input_string
-
+    return (temp_dir_2, temp_dir)
 def split_fasta(fasta_path, output_path, num_seqs, filenames):
     """ Splits a FASTA file.
         Parameters
@@ -905,15 +1054,34 @@ def split_fasta(fasta_path, output_path, num_seqs, filenames):
 
             new_file = join_paths(output_path,
                                   ['{0}{1}'.format(file_name, '.fasta')])
-
             splitted_files.append(new_file)
-
             write_records(current_recs, new_file)
-
             current_recs = []
 
     return splitted_files
 
+
+############
+# universal#
+############
+def copy_file_parralel(file, temp_dir, re_use_augustus_path, directory):
+    '''
+    copys a file to a new directory
+
+    :param file: str
+        name of the file to be copied
+    :param temp_dir: str
+        path to the temp directory where files will be copied to
+    :param re_use_augustus_path: str
+        path to the previous working directory of already processed files
+    :param directory: str
+        path to which directory the files are stored
+    :return:
+    '''
+
+    src = os.path.join(re_use_augustus_path, 'temp', directory, file)
+    dest = os.path.join(temp_dir, directory, file)
+    shutil.copy(src, dest)
 def replace_multiple_characters(input_string, replacements):
     """ Replaces multiple characters in a string.
         Parameters
@@ -931,7 +1099,23 @@ def replace_multiple_characters(input_string, replacements):
             input_string = input_string.replace(*r)
 
     return input_string
+def replace_multiple_characters(input_string, replacements):
+    """ Replaces multiple characters in a string.
+        Parameters
+        ----------
+        input_string : str
+            String with characters to be replaced.
+        Returns
+        -------
+        replaced : str
+            Input string without replaced characters.
+    """
 
+    for r in replacements:
+        if r[0] in input_string:
+            input_string = input_string.replace(*r)
+
+    return input_string
 def write_records(records, output_file):
     """ Writes FASTA records (BioPython SeqRecord) to a file.
         Parameters
@@ -945,13 +1129,11 @@ def write_records(records, output_file):
     with open(output_file, 'w') as output_handle:
         fasta_out = FastaIO.FastaWriter(output_handle, wrap=None)
         fasta_out.write_file(records)
-
 def create_directory(directory_path):
     """ Creates a diretory if it does not exist."""
 
     if not os.path.exists(directory_path):
         os.makedirs(directory_path)
-
 def read_tabular(input_file, delimiter='\t'):
     """ Read tabular file.
         Parameters
@@ -973,19 +1155,50 @@ def read_tabular(input_file, delimiter='\t'):
         lines = [line for line in reader]
 
     return lines
+def retrieve_CDS_AA_files(output_directory):
+    files = []
 
-def retrieve_CDS_AA(paths):
+    for file in os.listdir(os.path.join(output_directory, 'CDS_AA')):
+        if "_CDS" in file:
+            files.append((file.split('_CDS'))[0])
+        elif '_protein' in file:
+            files.append((file.split('_protein'))[0])
+
+    # remove duplication
+    files = list(set(files))
+    # find protein and CDA file of samples and couple to dictionary#
+    paths = {}
+    # retrieve file names of the protein output path
+    path = os.path.join(output_directory, 'CDS_AA')
+    files1 = sorted(os.listdir(path))
+
+    for file in files:
+        TMP_path = []
+        for file1 in files1:
+            if file in file1:
+                TMP_path.append(os.path.join(path, file1))
+        if len(TMP_path) == 2:
+            paths[file] = TMP_path
+
+    return(paths)
+def retrieve_CDS_AA(output_directory):
     """ Creates a dictionary with the CDS coupled to their AA sequence
+        - coupled the correct CDS and AA file against each other
+        - creates a dictionary with all sequences
 
          Parameters
          ----------
-        paths: dictionary of genomes:[ CDS file, protein file
+        paths: str
+            dictionary of genomes:[ CDS file, protein file
 
         :return
         ---------
         CDS_AA dict {gene ID (species_name + gene number) : CDS, AA}
         :
      """
+
+    paths = retrieve_CDS_AA_files(output_directory)
+
     CDS_AA = {}
     counterA = 0
     for sample in paths:
@@ -1002,24 +1215,24 @@ def retrieve_CDS_AA(paths):
             for line in AA:
                 if ">" in line:
                     tmp_id = ((line[1:]).rstrip() + "_" + sample)
-
                 else:
                     CDS_AA[tmp_id].append(line.rstrip())
 
-        #small check if CDS_AA is correct
+        # small check if CDS_AA is correct
         for i in CDS_AA.values():
             counter += 1
             counterA += 1
 
+            # this can also occour when proteins could not be coupled to the CDS - AA
+            # or that there is a dubble CDS sequention. if this occour should look into the code and adjust
             if len(i) != 2:
                 print('WARNING SOME PROTEINS COULD NOT BE COUPLED TO THEIR CORROSPONDING SEQ')
+                exit()
 
-        print('sample {0} contains {1} sequentions \n'.format(sample, counter))
-    print (' in total {0} sequences has been found'.format(counterA))
+    print(' in total {0} sequences has been found'.format(counterA))
 
     return (CDS_AA)
-
-def remove_duplicates(CDS_AA,len_value):
+def remove_duplicates(CDS_AA, len_value):
     '''
     removes duplications in the CDS_AA DIC to reduce computing time
 
@@ -1028,35 +1241,35 @@ def remove_duplicates(CDS_AA,len_value):
             CDS_AA dict {gene ID (species_name + gene number) : CDS, AA}
 
     len_value: int
-        how many (in sense of list) the dictinary keys existi of
+        how many (in sense of list) the dictinary keys exisists of
     :return:
             CDS_AA dict {gene ID (species_name + gene number) : CDS, AA}
 
     '''
     len1 = len(CDS_AA)
 
-
     # deletes duplicating DNA seq and AA seq out of item do reduce amount of computing time
+    # also for the correction of the clustering algorithm
     toPOP = []
     CDS = {}
     AA = {}
 
-    #initiate if dictionary added values is length 2 or 1
-
+    # initiate if dictionary added values is length 2 or 1
     if len_value == 2:
         # Duplicate items will not be set in the new dic
 
+        # search the CDS values which are duplicates.
+        # will be added to toPOP list to which should be removed
         for ID, value in CDS_AA.items():
             if value[0] not in CDS.values():
                 CDS[ID] = value[0]
             else:
                 toPOP.append(ID)
-
+        # removes sequences from CDS_AA (also the proein sequence)
         for item in toPOP:
             CDS_AA.pop(item)
 
         toPOP = []
-
         # removing duplicate AA
         for ID, value in CDS_AA.items():
             if value[1] not in AA.values():
@@ -1067,8 +1280,8 @@ def remove_duplicates(CDS_AA,len_value):
         for item in toPOP:
             CDS_AA.pop(item)
 
+    # does the same as above but only when the given dictionary contains a list of a single value
     elif len_value == 1:
-
         for ID, value in CDS_AA.items():
             if value not in CDS.values():
                 CDS[ID] = value
@@ -1084,7 +1297,6 @@ def remove_duplicates(CDS_AA,len_value):
     print(' finisht removing of ' + str(len1 - len2) + ' duplications')
 
     return (CDS_AA)
-
 def remove_small(CDS_AA, MinSeqlen):
     '''
     removes CDS sequences who are smaller then 201 nucleotides
@@ -1106,13 +1318,12 @@ def remove_small(CDS_AA, MinSeqlen):
     for ID, value in CDS_AA.items():
         if len(value[0]) < MinSeqlen:
             toPOP.append(ID)
-
+    # remove from dictionary
     for item in toPOP:
         CDS_AA.pop(item)
 
     return (CDS_AA)
     print(' finisht removing of ' + str(len(toPOP)) + ' sequences')
-
 def join_list(lst, link):
     """ Joins all elements in a list into a single string.
         Parameters
@@ -1131,7 +1342,6 @@ def join_list(lst, link):
     joined_list = link.join(lst)
 
     return joined_list
-
 def write_to_file(text, output_file, write_mode, end_char):
     """ Writes a single string to a file.
         Parameters
@@ -1150,7 +1360,6 @@ def write_to_file(text, output_file, write_mode, end_char):
 
     with open(output_file, write_mode) as out:
         out.write(text + end_char)
-
 def map_async_parallelizer(inputs, function, cpu, callback='extend',
                            chunksize=1, show_progress=True):
     """ Parallelizes function calls by creating several processes
@@ -1244,7 +1453,6 @@ def progress_bar(process, total, tickval=5, ticknum=20, completed=False):
     time.sleep(0.5)
 
     return completed
-
 def flatten_list(list_to_flatten):
     """ Flattens one level of a nested list.
         Parameters
@@ -1260,7 +1468,6 @@ def flatten_list(list_to_flatten):
     flattened_list = list(itertools.chain(*list_to_flatten))
 
     return flattened_list
-
 def function_helper(input_args):
     """ Runs function by passing set of provided inputs and
         captures exceptions raised during function execution.
@@ -1288,7 +1495,6 @@ def function_helper(input_args):
         results = [func_name, traceback_text]
 
     return results
-
 def write_lines(lines, output_file, joiner='\n'):
     """ Writes a list of strings to a file. The strings
         are joined with newlines before being written to
@@ -1305,7 +1511,6 @@ def write_lines(lines, output_file, joiner='\n'):
     joined_lines = join_list(lines, joiner)
 
     write_to_file(joined_lines, output_file, 'a', '\n')
-
 def join_paths(parent_path, child_paths):
     """ Creates a new path by joining a parent directory
         and a list with child paths."""
@@ -1313,7 +1518,6 @@ def join_paths(parent_path, child_paths):
     joined_paths = os.path.join(parent_path, *child_paths)
 
     return joined_paths
-
 def create_short(schema_files, schema_dir):
     """ Creates the 'short' directory for a schema.
         Creates the directory and copies schema files
@@ -1339,7 +1543,6 @@ def create_short(schema_files, schema_dir):
         shutil.copy(file, short_file)
 
     return True
-
 def sort_data(data, sort_key=None, reverse=False):
     """ Sorts an iterable.
         Parameters
@@ -1363,7 +1566,6 @@ def sort_data(data, sort_key=None, reverse=False):
         sorted_data = sorted(data, key=sort_key, reverse=reverse)
 
     return sorted_data
-
 def file_basename(file_path, suffix=True):
     """ Extract file basename from path.
         Parameters
@@ -1385,9 +1587,7 @@ def file_basename(file_path, suffix=True):
         basename = basename.split('.')[0]
 
     return basename
-
 def edit_files(tmp_output, sample_information, output_path):
-
     '''
     NOTICE< !!!!!!!!!!!!!!!!! the sample information dict needs probably be changed in the future
 
@@ -1405,27 +1605,39 @@ def edit_files(tmp_output, sample_information, output_path):
         sample infromation (this possible needs to be changed in the future
     '''
 
-    CDS_AA = os.path.join(output_path,'CDS_AA')
+    CDS_AA = os.path.join(output_path, 'CDS_AA')
     files = os.listdir(CDS_AA)
 
     for file in files:
         if '.fna' not in file:
-            items = file.rsplit('.',1)
-            file_new = items[0] +'.fna_'+ (items[1].split('_')[1])
-            os.rename(os.path.join(CDS_AA,file),os.path.join(CDS_AA,file_new))
+            items = file.rsplit('.', 1)
+            file_new = items[0] + '.fna_' + (items[1].split('_')[1])
+            os.rename(os.path.join(CDS_AA, file), os.path.join(CDS_AA, file_new))
 
     return (sample_information)
+def generate_sample_metadata(output_path, path_input, species=None, codontable_nr=1):
+    '''
+    creates an sample metadata tsv file from all the input genomes to prevent typos
+    the possibility is there to already add a species number and codon table
+    should be checkt when different species is sued
 
-def generate_sample_metadata(output_path, path_input,species=None,codontable_nr=1):
-
-    #get output folder (one previous then input dir
-    output = os.path.join(output_path,'sample_metadata_generated.tsv')
+    :param output_path: str
+        path where the TSV sample metadata file should be stored
+    :param path_input: str
+        path to directory containing input genomes
+    :param species:
+        which species name can be used / already be written
+    :param codontable_nr: int
+        codon table number to be used for the sample meta data
+    :return:
+    '''
+    # get output folder (one previous then input dir
+    output = os.path.join(output_path, 'sample_metadata_generated.tsv')
     files = os.listdir(path_input)
 
-    with open(output,'w') as f:
+    with open(output, 'w') as f:
         for file in files:
-            f.write('{0}\t{1}\t{2}\n'.format(file,species,codontable_nr))
-
+            f.write('{0}\t{1}\t{2}\n'.format(file, species, codontable_nr))
 
 ##############
 # clustering##
@@ -1551,7 +1763,6 @@ def cluster_sequences(sequences, word_size, window_size, clustering_sim,
     write_clusters(clusters, clusters_out)
 
     return clusters
-
 def write_clusters(clusters, outfile):
     """ Writes information about clusters to file.
         Parameters
@@ -1585,7 +1796,6 @@ def write_clusters(clusters, outfile):
     cluster_text = join_list(cluster_lines, '\n')
 
     write_to_file(cluster_text, outfile, 'w', '\n')
-
 def clusterer(sorted_sequences, word_size, window_size,
               clustering_sim, representatives, grow,
               offset, position, seq_num_cluster):
@@ -1650,7 +1860,6 @@ def clusterer(sorted_sequences, word_size, window_size,
                                            reps_sequences, reps_groups,
                                            seq_num_cluster, clustering_sim)
     return cluster_results[0:2]
-
 def select_representatives(kmers, reps_groups, clustering_sim):
     """ Determines the set of clusters that a sequence
         can be added to based on the decimal proportion
@@ -1692,7 +1901,6 @@ def select_representatives(kmers, reps_groups, clustering_sim):
     selected_reps = sorted(selected_reps, key=lambda x: x[1], reverse=True)
 
     return selected_reps
-
 def minimizer_clustering(sorted_sequences, word_size, window_size, position,
                          offset, clusters, reps_sequences, reps_groups,
                          seq_num_cluster, clustering_sim):
@@ -1801,7 +2009,6 @@ def minimizer_clustering(sorted_sequences, word_size, window_size, position,
             reps_sequences[protid] = protein
 
     return [clusters, reps_sequences, reps_groups]
-
 def sequence_kmerizer(sequence, k_value, offset=1, position=False):
     """ Decomposes a sequence into kmers.
         Parameters
@@ -1835,7 +2042,6 @@ def sequence_kmerizer(sequence, k_value, offset=1, position=False):
                  for i in range(0, len(sequence) - k_value + 1, offset)]
 
     return kmers
-
 def determine_minimizers(sequence, adjacent_kmers, k_value, offset=1,
                          position=False):
     """ Determines minimizers for a sequence based on
@@ -1918,7 +2124,6 @@ def determine_minimizers(sequence, adjacent_kmers, k_value, offset=1,
             previous = minimizer[0]
 
     return minimizers
-
 def merge_dictionaries(dictionaries_list):
     """ Merges several dictionaries into a single dictionary.
         Parameters
@@ -1937,7 +2142,6 @@ def merge_dictionaries(dictionaries_list):
         merged_dicts = {**merged_dicts, **d}
 
     return merged_dicts
-
 def cluster_representative_filter(clusters, representative_filter,
                                   output_directory, file_prefix):
     """ Excludes sequences from clusters based on the proportion
@@ -2010,8 +2214,7 @@ def cluster_representative_filter(clusters, representative_filter,
     print('Remaining sequences after representative and singleton '
           'pruning: {0}'.format(clustered_sequences))
 
-    return [pruned_clusters, excluded_seqids]
-
+    return(pruned_clusters, excluded_seqids)
 def split_iterable(iterable, size):
     """ Splits a dictionary.
         Parameters
@@ -2034,7 +2237,6 @@ def split_iterable(iterable, size):
         chunks.append({k: iterable[k] for k in itertools.islice(it, size)})
 
     return chunks
-
 def representative_pruner(clusters, sim_cutoff):
     """ Removes sequences from clusters based on a similarity
         threshold.
@@ -2076,7 +2278,6 @@ def representative_pruner(clusters, sim_cutoff):
                          if seqid[1] >= sim_cutoff and seqid[0] != rep])
 
     return [pruned_clusters, excluded]
-
 def remove_entries(dictionary, keys):
     """ Creates new dictionary without entries with
         specified keys.
@@ -2097,7 +2298,6 @@ def remove_entries(dictionary, keys):
     new_dict = {k: v for k, v in dictionary.items() if k not in keys}
 
     return new_dict
-
 def select_clusters(clusters, cluster_size):
     """ Determines clusters that contain a specified number
         of sequences.
@@ -2125,7 +2325,6 @@ def select_clusters(clusters, cluster_size):
     clusters_ids = [k for k, v in clusters.items() if len(v) == cluster_size]
 
     return clusters_ids
-
 def cluster_intra_filter(clusters, sequences, word_size,
                          intra_filter, output_directory,
                          file_prefix):
@@ -2201,7 +2400,6 @@ def cluster_intra_filter(clusters, sequences, word_size,
           '{0}'.format(clustered_sequences))
 
     return [pruned_clusters, intra_excluded]
-
 def intra_cluster_sim(clusters, sequences, word_size, intra_filter):
     """ Determines the percentage of shared kmers/minimizers
         between sequences in the same cluster and excludes
@@ -2281,7 +2479,6 @@ def intra_cluster_sim(clusters, sequences, word_size, intra_filter):
         excluded_sims[representative] = similarities
 
     return [excluded_seqids, excluded_sims]
-
 def pick_excluded(query, match, query_seq, match_seq):
     """ Determines which sequence should be excluded
         based on sequence length.
@@ -2315,7 +2512,6 @@ def pick_excluded(query, match, query_seq, match_seq):
         picked = (query, match[0], match[1])
 
     return picked
-
 def kmer_index(sequences, word_size):
     """ Creates a kmer index based on a set
         of sequences.
@@ -2355,6 +2551,53 @@ def kmer_index(sequences, word_size):
             kmers_mapping.setdefault(kmer, []).append(seqid)
 
     return [kmers_mapping, seqs_kmers]
+def edit_cluster_dir(output_directory, schema_name):
+    '''
+    rename possible directory name of the scheme name
+    intern the - in the paths will be seen as an calculation and not path
+    this is to prevent this bug
+    :param output_directory:
+    :param schema_name:
+    :return:
+    '''
+    path4 = os.path.join(output_directory, schema_name)
+    path5 = os.path.join(path4, 'short')
+
+    paths = [path4, path5]
+    for path in paths:
+        files = os.listdir(path)
+        for file in files:
+            try:
+                file1 = file.replace('-', '_')
+                pathA = os.path.join(path, file)
+                pathB = os.path.join(path, file1)
+                with open(pathA) as n:
+                    with open(pathB, 'w') as f:
+                        for line in n:
+                            f.write(line.replace('-', '_'))
+                os.remove(pathA)
+            except:
+                print('')
+def Retrieve_AA_seq_CDS_seq(CDS_AA):
+    '''
+    retrieves the AA and CDS part and put it in a different dictionary
+    From the CDS_AA dict
+    :param CDS_AA: dict
+        seq_id :[CDS,AA]
+    :return:
+        dicts
+        seq_id:CDS
+        seq_id:AA
+    '''
+    AA = {}
+    CDS = {}
+
+    # create dictionary with only AA
+    for k, v in CDS_AA.items():
+        AA[k] = v[1]
+        CDS[k] = v[0]
+
+    return (AA, CDS)
 
 ############
 # blasting #
@@ -2482,7 +2725,6 @@ def cluster_fasta(temp_directory, clusters, AA):
                 f.write((v + '\n'))
 
     return (fasta_path)
-
 def get_sequences_by_id(sequences, seqids, out_file, limit=5000):
     """ Retrieves sequences from an indexed FASTA file.
         Parameters
@@ -2521,7 +2763,6 @@ def get_sequences_by_id(sequences, seqids, out_file, limit=5000):
             lines = join_list(records, '\n')
             write_to_file(lines, out_file, 'a', '\n')
             records = []
-
 def integer_headers(input_fasta, output_fasta, start=1, limit=5000):
     """ Switches FASTA records headers in a file by integer
         values.
@@ -2564,7 +2805,6 @@ def integer_headers(input_fasta, output_fasta, start=1, limit=5000):
             seqs = []
 
     return ids_map
-
 def make_blast_db(makeblastdb_path, input_fasta, output_path, db_type,
                   ignore=None):
     """ Creates a BLAST database.
@@ -2605,7 +2845,6 @@ def make_blast_db(makeblastdb_path, input_fasta, output_path, db_type,
             stderr = filter_list(stderr, ignore)
 
     return stderr
-
 def decode_str(str_list, encoding):
     """ Decodes bytes objects in the input list and
         strips decoded strings from whitespaces and
@@ -2630,7 +2869,6 @@ def decode_str(str_list, encoding):
                for m in str_list]
 
     return decoded
-
 def filter_list(lst, remove):
     """ Removes elements from a list.
         Parameters
@@ -2648,7 +2886,6 @@ def filter_list(lst, remove):
     filtered_list = list(set(lst) - set(remove))
 
     return filtered_list
-
 def cluster_blaster(seqids, sequences, output_directory,
                     blast_path, blastdb_path):
     """ Aligns sequences in the same cluster with BLAST.
@@ -2710,7 +2947,6 @@ def cluster_blaster(seqids, sequences, output_directory,
         out_files.append(blast_output)
 
     return out_files
-
 def fasta_str_record(seqid, sequence):
     """ Creates the string representation of a FASTA record.
         Parameters
@@ -2728,7 +2964,6 @@ def fasta_str_record(seqid, sequence):
     record = '>{0}\n{1}'.format(seqid, sequence)
 
     return record
-
 def run_blast(blast_path, blast_db, fasta_file, blast_output,
               max_hsps=1, threads=1, ids_file=None, blast_task=None,
               max_targets=None, ignore=None, e_value='0.001'):
@@ -2792,11 +3027,9 @@ def run_blast(blast_path, blast_db, fasta_file, blast_output,
             stderr = filter_list(stderr, ignore)
 
     return stderr
-
-
 def run_blastn(blast_path, blast_db, fasta_file, blast_output,
-              max_hsps=1, threads=1, ids_file=None, blast_task=None,
-              max_targets=None, ignore=None, e_value='0.001'):
+               max_hsps=1, threads=1, ids_file=None, blast_task=None,
+               max_targets=None, ignore=None, e_value='0.001'):
     """ Execute BLAST to align sequences in a FASTA file
         against a BLAST database.
         Parameters
@@ -2833,11 +3066,12 @@ def run_blastn(blast_path, blast_db, fasta_file, blast_output,
         stderr : str
             String with errors raised during BLAST execution.
     """
-
+    # the blast name
     blast_args = [blast_path, '-db', blast_db, '-query', fasta_file,
                   '-out', blast_output, '-outfmt', '6 qseqid sseqid bitscore  pident  qcovus',
                   '-max_hsps', str(max_hsps), '-num_threads', str(threads),
                   '-evalue', e_value]
+    # insert blast parameters if required
     if ids_file is not None:
         blast_args.extend(['-seqidlist', ids_file])
     if blast_task is not None:
@@ -2850,15 +3084,13 @@ def run_blastn(blast_path, blast_db, fasta_file, blast_output,
                                   stderr=subprocess.PIPE)
 
     stderr = blast_proc.stderr.readlines()
-
+    # decode
     if len(stderr) > 0:
         stderr = decode_str(stderr, 'utf8')
         if ignore is not None:
             stderr = filter_list(stderr, ignore)
 
     return stderr
-
-
 def join_list(lst, link):
     """ Joins all elements in a list into a single string.
         Parameters
@@ -2877,7 +3109,6 @@ def join_list(lst, link):
     joined_list = link.join(lst)
 
     return joined_list
-
 def blast_inputs(clusters, output_directory, ids_dict):
     """ Creates files with the identifiers of the sequences
         in each cluster.
@@ -2918,7 +3149,6 @@ def blast_inputs(clusters, output_directory, ids_dict):
         ids_to_blast.append((rev_ids[rep], len(cluster_ids)))
 
     return ids_to_blast
-
 def split_genes_by_core(inputs, cores, method):
     """ Creates balanced lists of loci to distribute per number
         of available cores. Loci lists can be created based
@@ -2966,7 +3196,6 @@ def split_genes_by_core(inputs, cores, method):
         i = splitted_values.index(min(splitted_values))
 
     return splitted_ids
-
 def get_sequences_by_id(sequences, seqids, out_file, limit=5000):
     """ Retrieves sequences from an indexed FASTA file.
         Parameters
@@ -3005,7 +3234,6 @@ def get_sequences_by_id(sequences, seqids, out_file, limit=5000):
             lines = join_list(records, '\n')
             write_to_file(lines, out_file, 'a', '\n')
             records = []
-
 def apply_bsr(blast_results, CDS, bsr, ids_dict):
     """ Computes the BLAST Score Ratio value for BLAST
         alignments and returns the identifiers of the
@@ -3073,11 +3301,33 @@ def apply_bsr(blast_results, CDS, bsr, ids_dict):
 
     return excluded_alleles
 
+def initialise_blast_alias_path(blast_dir):
+        '''
+        initialises blast paramaters
+
+        :return:
+
+        Blast_path: str
+            path to blast program
+        makeblastdb_path: str
+            path to create blast databae program
+
+        '''
+        BLASTN_ALIAS = 'blastn.exe' if platform.system() == 'Windows' else 'blastn'
+        BLASTP_ALIAS = 'blastp.exe' if platform.system() == 'Windows' else 'blastp'
+        MAKEBLASTDB_ALIAS = 'makeblastdb.exe' if platform.system() == 'Windows' else 'makeblastdb'
+        blastn_path = os.path.join(blast_dir, BLASTN_ALIAS)
+        blastp_path = os.path.join(blast_dir, BLASTP_ALIAS)
+
+        makeblastdb_path = os.path.join(blast_dir, MAKEBLASTDB_ALIAS)
+
+        return (blastn_path, blastp_path, makeblastdb_path)
 
 
 ############################################
 # Add loci  & add gene & prep_recluster    #
 ############################################
+
 def add_loci_to_seed(add_loci, output_path, force, codon_nr):
     '''
     adds a loci to the seed. if Force is True. genes will be directly added to cluster direcotry
@@ -3128,12 +3378,11 @@ def add_loci_to_seed(add_loci, output_path, force, codon_nr):
         genes_to_add = remove_dup_from_dic(genes_to_add, genes)
 
         # add loci directly to clustering dir with Forced pre_fix
-        add_loci_to_directory(genes_to_add, output_path,'CDS_AA','custom_loci','fna_CDS', codon_nr)
+        add_loci_to_directory(genes_to_add, output_path, 'CDS_AA', 'custom_loci', 'fna_CDS', codon_nr)
 
         print('finisht adding loci to genes folder\n'
               'it is advised to Rerun the clustering step for optimal results\n'
               'This can be done by using the command ###### INSERT COMMAND HERE############')
-
 def retrieve_genes_of_loci(output_path, dir):
     '''
     retrieve genes from CDS_AA dir or clustering dir to prevent duplication
@@ -3148,17 +3397,18 @@ def retrieve_genes_of_loci(output_path, dir):
     :return:
     list of all genes in either CDS_AA or Clustering
     '''
-    #check weither output path already exist
+    # check weither output path already exist
     path = os.path.join(output_path, dir)
     if not os.path.isdir(path):
-        print('path {0} does not exist, try running euTyper normal first withouth -add_loci or correct path'.format(path))
+        print(
+            'path {0} does not exist, try running euTyper normal first withouth -add_loci or correct path'.format(path))
         exit()
     # Retrieve all genomes to prevent duplication of loci's
     genomes = []
     files = os.listdir(path)
     for file in files:
         try:
-            with open(os.path.join(path,file),'r') as f:
+            with open(os.path.join(path, file), 'r') as f:
                 seq = ''
                 for line in f:
                     if ">" not in line:
@@ -3166,11 +3416,10 @@ def retrieve_genes_of_loci(output_path, dir):
             genomes.append(seq)
         except:
             # small check that it isnt a directory
-            if not os.path.isdir(os.path.join(path,file)):
+            if not os.path.isdir(os.path.join(path, file)):
                 print('could not open file "{0}"'.format(file))
 
-    return(genomes)
-
+    return (genomes)
 def retrieve_genes_from_add_loci_file(add_loci):
     '''
     retrieve the genes from a fasta file and checks if it is a DNA sequence (to prevent bugs)
@@ -3182,10 +3431,10 @@ def retrieve_genes_from_add_loci_file(add_loci):
     :return:
         list of genes to be added
     '''
-    DNA_seq =['A','a',"C",'c',"G","g","T",'t']
+    DNA_seq = ['A', 'a', "C", 'c', "G", "g", "T", 't']
     # Retrieve gene and genes from add loci file in fasta format
     genes_to_add = {}
-    with open(add_loci,'r') as f:
+    with open(add_loci, 'r') as f:
         for line in f:
             if ">" in line:
                 gene_name = line[1:].rstrip()
@@ -3200,17 +3449,19 @@ def retrieve_genes_from_add_loci_file(add_loci):
     for key in genes_to_add.keys():
         for char in genes_to_add[key]:
             if char not in DNA_seq:
-                print('found character {0} in DNA sequence {1} \nThis is from given gene name {2}'.format(char,genes_to_add[key],key))
+                print('found character {0} in DNA sequence {1} \nThis is from given gene name {2}'.format(char,
+                                                                                                          genes_to_add[
+                                                                                                              key],
+                                                                                                          key))
                 print('\ngene will be deleted from genes to add to loci')
                 genes_to_remove.append(key)
                 break
 
-    #remove non DNA genes
+    # remove non DNA genes
     for key in genes_to_remove:
         genes_to_add.pop(key)
 
-    return(genes_to_add)
-
+    return (genes_to_add)
 def add_loci_to_directory(genes_to_add, output_path, dir1, pre_fix, suffix1, codon_nr):
     '''
     adds loci to a certain directory (CDS_AA or clustering)
@@ -3246,11 +3497,10 @@ def add_loci_to_directory(genes_to_add, output_path, dir1, pre_fix, suffix1, cod
 
     # loop through all sequences and generate a fasta file in the required foled
     for key, value in genes_to_add.items():
-        print(key)
-        #an if statement for if Forced is not enforced.
+        # an if statement for if Forced is not enforced.
         # it breaks the loop when the protein sequence doesnt make any sense
         if dir1 == 'CDS_AA':
-            #calculate protein sequence from CDS
+            # calculate protein sequence from CDS
             protein = translate_dna(value, codon_nr, 0)
 
             if (protein[-1]) != 'sense':
@@ -3259,16 +3509,16 @@ def add_loci_to_directory(genes_to_add, output_path, dir1, pre_fix, suffix1, cod
                 continue
 
         # open file to write down the CDS
-        file_name = os.path.join(path,(pre_fix+'_' + key + suffix1))
-        with open(file_name,'w') as f:
-            f.write(('>forced_'+key.rstrip()+'\n'))
+        file_name = os.path.join(path, (pre_fix + '_' + key + suffix1))
+        with open(file_name, 'w') as f:
+            f.write(('>forced_' + key.rstrip() + '\n'))
             f.write((value.rstrip()))
 
         # if the folder is clustering etc for forced add also sequence in short foleder
         if dir1 == 'clustering':
-            file_name = os.path.join(path,'short',('forced_' + key +'_short' + suffix1))
-            with open(file_name,'w') as f:
-                f.write(('>forced_'+key.rstrip()+'\n'))
+            file_name = os.path.join(path, 'short', ('forced_' + key + '_short' + suffix1))
+            with open(file_name, 'w') as f:
+                f.write(('>forced_' + key.rstrip() + '\n'))
                 f.write((value.rstrip()))
 
         elif dir1 == 'CDS_AA':
@@ -3278,10 +3528,7 @@ def add_loci_to_directory(genes_to_add, output_path, dir1, pre_fix, suffix1, cod
                 f.write(('>forced_' + key.rstrip() + '\n'))
                 f.write((str(protein[0][0]).rstrip()))
 
-
-
     print('{0} fasta files added to clustering directory with forced pre_fixed'.format(len(genes_to_add)))
-
 def remove_dup_from_dic(genes_to_add, genes):
     '''
     removes duplication if the gene to be added is already in either CDS_AA or clustering
@@ -3300,18 +3547,15 @@ def remove_dup_from_dic(genes_to_add, genes):
 
     to_pop = []
     for key, value in genes_to_add.items():
-            if value in genes:
-                print('{0} is already in CDS_AA'.format(key))
-                to_pop.append(key)
+        if value in genes:
+            print('{0} is already in CDS_AA'.format(key))
+            to_pop.append(key)
 
     for item in to_pop:
-            genes_to_add.pop(item)
+        genes_to_add.pop(item)
 
     return (genes_to_add)
-
 def prepare_temp_dir(output_path, TMP_directory):
-
-
     '''
     renames the old temporary directory to prevent bugs or gaining weird outcomes.
     instead of deleting a used can check files or manually rever to the old one
@@ -3330,20 +3574,21 @@ def prepare_temp_dir(output_path, TMP_directory):
     print('start renaming TMP files to reduce buggs')
     # retrieve number and dir name to generate new TMP dir name
     new_temp_dir = TMP_directory.split('_')
-    #gen prefix
+    # gen prefix
     count = 1
-    #prevents running in error
-    if os.path.exists(os.path.join(output_path,'temp',TMP_directory)):
-        #loops thorugh every number aslong as the path already exists
-        while os.path.exists(os.path.join(output_path, 'temp', (new_temp_dir[0] + '.' + str(count) + '_' + new_temp_dir[1]))):
+    # prevents running in error
+    if os.path.exists(os.path.join(output_path, 'temp', TMP_directory)):
+        # loops thorugh every number aslong as the path already exists
+        while os.path.exists(
+                os.path.join(output_path, 'temp', (new_temp_dir[0] + '.' + str(count) + '_' + new_temp_dir[1]))):
             print(os.path.join(output_path, 'temp', (new_temp_dir[0] + '.' + str(count) + '_' + new_temp_dir[1])))
             count += 1
-        new_file_name = (os.path.join(output_path, 'temp', (new_temp_dir[0] + '.' + str(count) + '_' + new_temp_dir[1])))
+        new_file_name = (
+            os.path.join(output_path, 'temp', (new_temp_dir[0] + '.' + str(count) + '_' + new_temp_dir[1])))
 
         print('old temp directory {0} will be renamed as {1}'.format(TMP_directory, new_file_name))
-        #renaming directory to prevent bugs
-        os.rename(os.path.join(output_path,'temp',TMP_directory),new_file_name)
-
+        # renaming directory to prevent bugs
+        os.rename(os.path.join(output_path, 'temp', TMP_directory), new_file_name)
 def prepare_recluster(output_path):
     '''
     prepared reclustering by renaming old directory.
@@ -3357,21 +3602,22 @@ def prepare_recluster(output_path):
     :return:
     NA
     '''
-    if os.path.exists(os.path.join(output_path,'clustering')):
+    if os.path.exists(os.path.join(output_path, 'clustering')):
 
         count = 1
         while os.path.exists(os.path.join(output_path, ('clustering_' + str(count)))):
             count += 1
         new_file_name = (os.path.join(output_path, ('clustering_' + str(count))))
-        print('old clustering directory {0} will be renamed as {1}'.format(os.path.join(output_path,'clustering'), new_file_name))
+        print('old clustering directory {0} will be renamed as {1}'.format(os.path.join(output_path, 'clustering'),
+                                                                           new_file_name))
 
-        os.rename(os.path.join(output_path,'clustering'),new_file_name)
+        os.rename(os.path.join(output_path, 'clustering'), new_file_name)
 
-#################
-# create scheme#
-################
+####################
+# Refine set of loci#
+####################
 
-def Create_fasta_for_blast(output_path, beta_file,location):
+def Create_fasta_for_blast(output_path, beta_file, location):
     '''
     creates a fasta file of all loci to generate a database later on
 
@@ -3387,14 +3633,14 @@ def Create_fasta_for_blast(output_path, beta_file,location):
     '''
 
     print('start creating fasta_file for database generation')
-    #Retrieve all CDS of the Loci
+    # Retrieve all CDS of the Loci
     seqs = {}
-    scheme_seeds = os.listdir(os.path.join(output_path,location))
+    scheme_seeds = os.listdir(os.path.join(output_path, location))
     count = 0
     for file in scheme_seeds:
         try:
             if file != 'short':
-                with open(os.path.join(output_path,location,file),'r') as f:
+                with open(os.path.join(output_path, location, file), 'r') as f:
                     count += 1
                     CDS = ""
                     for line in f:
@@ -3411,25 +3657,23 @@ def Create_fasta_for_blast(output_path, beta_file,location):
     # write out fasta file to create Blast DB #
     ###########################################
 
-    with open(beta_file,'w') as f:
+    with open(beta_file, 'w') as f:
         for seq_id in seqs.keys():
-            f.write(">"+(seq_id)+"-@-"+(((seqs[seq_id])[0]).replace("-","_"))+ '\n')
-            f.write(((seqs[seq_id])[1])+'\n')
+            f.write(">" + (seq_id) + "-@-" + (((seqs[seq_id])[0]).replace("-", "_")) + '\n')
+            f.write(((seqs[seq_id])[1]) + '\n')
 
-
-    #do this to make the file nether. there are unnecacry \n in it which i believe might cause bugs
-    beta_file1 = beta_file+'1'
-    with open(beta_file1,'w') as n:
-        with open(beta_file,'r') as f:
+    # do this to make the file nether. there are unnecacry \n in it which i believe might cause bugs
+    beta_file1 = beta_file + '1'
+    with open(beta_file1, 'w') as n:
+        with open(beta_file, 'r') as f:
             for line in f:
                 if "\n" != line:
                     n.write(line)
 
     os.remove(beta_file)
-    os.rename(beta_file1,beta_file)
+    os.rename(beta_file1, beta_file)
 
-    return(seqs)
-
+    return (seqs)
 def retrieve_all_sample_sequences(output_path, scheme_blast):
     '''
     Retrieve all CDS from the CDS_AA directory and put it in the sequention dictionary
@@ -3445,14 +3689,14 @@ def retrieve_all_sample_sequences(output_path, scheme_blast):
         sequention dictionary
         path to fasta file containing all CDS
     '''
-    files_path = os.path.join(output_path,'CDS_AA')
+    files_path = os.path.join(output_path, 'CDS_AA')
 
-    #retrieve all CDS files
+    # retrieve all CDS files
     files1 = [x for x in os.listdir(files_path) if ".fna_protein" not in x]
 
     sequentions = {}
     for file in files1:
-        file1 = os.path.join(files_path,file)
+        file1 = os.path.join(files_path, file)
         id = (file.split('.fna_CDS'))[0]
         hit_gene = False
         with open(file1) as f:
@@ -3463,84 +3707,72 @@ def retrieve_all_sample_sequences(output_path, scheme_blast):
                         sequentions[gID] = seqs
 
                     hit_gene = False
-                    #print(line)
+                    # print(line)
                     gID = (((((line.split('>'))[1]).rstrip()) + "_" + id))
                     seqs = ''
                 else:
-                    seqs = seqs +line.rstrip()
+                    seqs = seqs + line.rstrip()
                     hit_gene = True
             sequentions[gID] = seqs
 
-    with open(os.path.join(scheme_blast,'all_cds'),'w') as f:
-            for id,seq in sequentions.items():
-                sequentions[id] = [seq, (os.path.join(scheme_blast,'all_cds'))]
-                f.write((">"+id+'\n'))
-                f.write((seq+'\n'))
+    with open(os.path.join(scheme_blast, 'all_cds'), 'w') as f:
+        for id, seq in sequentions.items():
+            sequentions[id] = [seq, (os.path.join(scheme_blast, 'all_cds'))]
+            f.write((">" + id + '\n'))
+            f.write((seq + '\n'))
 
-    return(sequentions,(os.path.join(scheme_blast,'all_cds')))
+    return (sequentions, (os.path.join(scheme_blast, 'all_cds')))
+def retrieve_orpahns(blast_results_file, BSRn, sequentions=None, fasta_path=None):
+    '''
+    retrieve orphans sequention. orhpans re the CDS identifiers who didnt contain any blast results
 
+    :param blast_results_dir: str
+        path to blast result dir
+    :param BSRn: int
+        cutoff value when a blast hit seems legit
+    :param sequentions: dic
+        dictionary of all CDS
+    :param fasta_path: str
+        path to fasta file used for blast
 
-def retrieve_orpahns(blast_results_dir, BSRn , sequentions=None, fasta_path=None):
+    :return:
+        orphans list
+            list containing all sequences who didnt have a blast hit above BSRn
+    '''
+    orphans = []
+    hits_expeced = []
+    count = 0
 
-        '''
-        retrieve orphans sequention. orhpans re the CDS identifiers who didnt contain any blast results
+    # retrieve all hits expected, is neccacery due file size == 0 cant work now and might be bugged
+    with open(fasta_path) as f:
+        for line in f:
+            if ">" in line:
+                if ((line[1:].rstrip())) not in hits_expeced:
+                    hits_expeced.append((line[1:].rstrip()))
 
-        :param blast_results_dir: str
-            path to blast result dir
-        :param BSRn: int
-            cutoff value when a blast hit seems legit
-        :param sequentions: dic
-            dictionary of all CDS
-        :param fasta_path: str
-            path to fasta file used for blast
+    # retrieve selfscores
+    # a hit is made when it has an self score
+    self_scores = retrieve_self_scores(blast_results_file)
 
-        :return:
-            orphans list
-                list containing all sequences who didnt have a blast hit above BSRn
-        '''
-        orphans = []
-        self_scores = {}
-        hits_expeced = []
-        hits_detected = []
-        count = 0
-
-        # retrieve all hits expected, is neccacery due file size == 0 cant work now and might be bugged
-        with open(fasta_path) as f:
-            for line in f:
-                if ">" in line:
-                    if ((line[1:].rstrip())) not in hits_expeced:
-                        hits_expeced.append((line[1:].rstrip()))
-
-        # retrieve selfscores
-        # a hit is made when it has an self score
-        with open(blast_results_dir) as f:
-            for line in f:
-                line = (line.split('\t'))
-                line = [line[0], ((line[1].split('-@-'))[1]), line[2].rstrip()]
-
-                if line[0] == line[1]:
-                    self_scores[line[1]] = line[2]
-                    if line[0] not in hits_detected:
-                        hits_detected.append(line[0])
-
-        # detect if an item has a score with anotther loci then it self
-        with open(blast_results_dir) as f:
-            for line in f:
-                line = (line.split('\t'))
-                line = [line[0], ((line[1].split('-@-'))[1]), line[2].rstrip()]
-                if line[1] in self_scores.keys():
-                    if float(((float(line[2]) / float(self_scores[(line[1])])))) >= BSRn:
-                        if line[0] not in hits_detected:
-                            hits_detected.append(line[0])
-                    else:
-                        count += 1
+    # detect if an item has a score with anotther loci then it self
+    with open(blast_results_file) as f:
+        for line in f:
+            line = (line.split('\t'))
+            line = [line[0], ((line[1].split('-@-'))[1]), line[2].rstrip()]
+            if line[1] in self_scores.keys():
+                if float(((float(line[2]) / float(self_scores[(line[1])])))) >= BSRn:
+                    if line[0] not in self_scores.keys():
+                        self_scores.keys().append(line[0])
                 else:
-                    print('{0} was not found in selfscores while it should'.format(line[1]))
-        orphans = list(set(hits_expeced) - set(hits_detected))
-        print('in total were {0} orphans detected who required to be evaluated, they didnt meet the BSR score of {1} or had any blast results'.format(len(orphans), BSRn))
+                    count += 1
+            else:
+                print('{0} was not found in selfscores while it should'.format(line[1]))
+    orphans = list(set(hits_expeced) - set(self_scores.keys()))
+    print(
+        'in total were {0} orphans detected who required to be evaluated, they didnt meet the BSR score of {1} or had any blast results'.format(
+            len(orphans), BSRn))
 
-        return (orphans)
-
+    return (orphans)
 def prepare_fasta_files(orphans_names, sequentions, ClusterO_path, fasta_path):
     '''
     creates a fasta file of all sequences who didnt have a blast result to recluster
@@ -3573,31 +3805,27 @@ def prepare_fasta_files(orphans_names, sequentions, ClusterO_path, fasta_path):
 
         CDS[i] = ((sequentions[i])[0])
 
-    path = os.path.join(ClusterO_path,'fasta_files')
+    path = os.path.join(ClusterO_path, 'fasta_files')
     os.makedirs(path)
     files = []
-    #remove duplications
-    #CDS = remove_duplicates(CDS, 1)
-    #write doen fasta files for blasting
-    for i in CDS:
-            path1 = (os.path.join(path,(i+'.fasta')))
-            files.append(path1)
-            with open(path1,'w') as f:
-                f.write(('>'+i+'\n'))
-                f.write(((CDS[i])))
 
-    path1 =None
+    # write doen fasta files for blasting
+    for i in CDS:
+        path1 = (os.path.join(path, (i + '.fasta')))
+        files.append(path1)
+        with open(path1, 'w') as f:
+            f.write(('>' + i + '\n'))
+            f.write(((CDS[i])))
 
     path1 = (os.path.join(ClusterO_path, ('orhpan_fastas.fasta')))
     with open(path1, 'w') as f:
-            for i in CDS:
-                f.write(('>'+i+'\n'))
-                f.write(((CDS[i])+'\n'))
+        for i in CDS:
+            f.write(('>' + i + '\n'))
+            f.write(((CDS[i]) + '\n'))
 
     files = None
 
-    return(files, path1)
-
+    return (files, path1)
 def BSR_filter_grouping(path, BSRn):
     '''
     Screens through the Blast files
@@ -3623,7 +3851,7 @@ def BSR_filter_grouping(path, BSRn):
 
         # retrieve the self scores
         for file in files:
-            with open(os.path.join(path,file)) as f:
+            with open(os.path.join(path, file)) as f:
                 file_lines[file] = 0
                 for line in f:
                     file_lines[file] += 1
@@ -3635,19 +3863,20 @@ def BSR_filter_grouping(path, BSRn):
 
         # goes through each file if there are anyother blast results than self hits
         for file in files:
-            with open(os.path.join(path,file)) as f:
+            with open(os.path.join(path, file)) as f:
                 for line in f:
                     line = (line.split('\t'))
                     line = [line[0], ((line[1].split('-@-'))[1]), line[2].rstrip()]
                     if line[0] != line[1]:
-                        #small check weither it also has other hits
+                        # small check weither it also has other hits
                         if file_lines[file] >= 2:
-                        #Calculate BSR value from the self scores which has to be higher then BSRn (0.8)
-                            if ((float(line[2])/float(self_scores[line[1]]))) >= BSRn:
+                            # Calculate BSR value from the self scores which has to be higher then BSRn (0.8)
+                            if ((float(line[2]) / float(self_scores[line[1]]))) >= BSRn:
                                 loci[line[1]].append(line[0])
 
+    # if given path is not a direcotry but a single file
     else:
-
+        # retrieving the self scores
         with open(path) as f:
             for line in f:
                 line = (line.split('\t'))
@@ -3656,20 +3885,18 @@ def BSR_filter_grouping(path, BSRn):
                 if line[0] == line[1]:
                     self_scores[line[1]] = line[2]
                     loci[line[1]] = [line[0]]
-
+        # scores
         with open(path) as f:
             for line in f:
                 line = (line.split('\t'))
                 line = [line[0], ((line[1].split('-@-'))[1]), line[2].rstrip()]
                 if line[0] != line[1]:
                     # small check weither it also has other hits
-                        # Calculate BSR value from the self scores which has to be higher then BSRn (0.8)
-                        if ((float(line[2]) / float(self_scores[line[1]]))) >= BSRn:
-                            loci[line[1]].append(line[0])
+                    # Calculate BSR value from the self scores which has to be higher then BSRn (0.8)
+                    if ((float(line[2]) / float(self_scores[line[1]]))) >= BSRn:
+                        loci[line[1]].append(line[0])
 
-
-    return(loci,self_scores)
-
+    return (loci, self_scores)
 def Cluster_BSR_groups(loci, self_scores):
     '''
     Dicts in loci will be clusterd and evaluated.
@@ -3742,7 +3969,7 @@ def Cluster_BSR_groups(loci, self_scores):
         elif len(max_keys) == 1:
             items_total_group[max_keys[0]] = set(similar_groups)
 
-    #small count to give away howmany true orphans are found and howmany normal loci
+    # small count to give away howmany true orphans are found and howmany normal loci
     count = 0
     countA = 0
     for k, i in items_total_group.items():
@@ -3751,10 +3978,9 @@ def Cluster_BSR_groups(loci, self_scores):
         else:
             countA += 1
 
-    print('{0} true orphans has been detected\n{1} new loci has been detected'.format(count,countA))
+    print('{0} true orphans has been detected\n{1} new loci has been detected'.format(count, countA))
 
-    return(items_total_group.keys())
-
+    return (items_total_group.keys())
 def update_scheme_seed(new_clusters, output_path, fasta_paths):
     '''
     when new clusters are detected by the find orphans and blasting, they will be added to the loci directory
@@ -3772,122 +3998,120 @@ def update_scheme_seed(new_clusters, output_path, fasta_paths):
         new scheme seed path = str
             path to new genereated scheme seed
     '''
-    #generate new folder as updated clusters where loci will be stored
-    new_scheme_seed_path = os.path.join(output_path,'updated_clustering')
-    old_scheme_seed_path =  os.path.join(output_path,'clustering')
+    # generate new folder as updated clusters where loci will be stored
+    new_scheme_seed_path = os.path.join(output_path, 'updated_clustering')
+    old_scheme_seed_path = os.path.join(output_path, 'clustering')
 
-    #for easy debugging
-    #if os.path.exists(new_scheme_seed_path):
+    # for easy debugging
+    # if os.path.exists(new_scheme_seed_path):
     #    shutil.rmtree(new_scheme_seed_path)
 
-    os.makedirs(new_scheme_seed_path,exist_ok=True)
-    os.makedirs(os.path.join(new_scheme_seed_path,'short'),exist_ok=True)
+    os.makedirs(new_scheme_seed_path, exist_ok=True)
+    os.makedirs(os.path.join(new_scheme_seed_path, 'short'), exist_ok=True)
 
     files1 = os.listdir(old_scheme_seed_path)
     files2 = os.listdir(new_scheme_seed_path)
     files1 = list(set(files1) - set(files2))
-    #copy directory to new one,
+    # copy directory to new one,
 
-    #add the new clusters
+    # add the new clusters
     files = new_clusters
     for file in files:
         if file in files2:
-                print('This "ORPHAN" is already in loci how weird')
-        path = os.path.join(fasta_paths,(file+'.fasta'))
+            print('This "ORPHAN" is already in loci how weird')
+        path = os.path.join(fasta_paths, (file + '.fasta'))
         if not os.path.exists(path):
             print('path doesnt exist')
 
         dest = os.path.join(new_scheme_seed_path, (file + '.fna.fasta'))
         dest1 = os.path.join(new_scheme_seed_path, 'short', (file + '.fna.fasta'))
         with open(path) as f:
-            with open(dest,'w') as a:
-                with open(dest1,'w') as b:
+            with open(dest, 'w') as a:
+                with open(dest1, 'w') as b:
                     for line in f:
                         a.write(line)
                         b.write(line)
 
     for file in files1:
-            src = os.path.join(old_scheme_seed_path,file)
-            if os.path.isdir(src):
-                continue
-            with open(src) as f:
-                dest = os.path.join(new_scheme_seed_path, (file))
-                with open(dest,'w') as a:
-                    for line in f:
-                        a.write(line)
-
+        src = os.path.join(old_scheme_seed_path, file)
+        if os.path.isdir(src):
+            continue
+        with open(src) as f:
+            dest = os.path.join(new_scheme_seed_path, (file))
+            with open(dest, 'w') as a:
+                for line in f:
+                    a.write(line)
 
     for file in files1:
-            src = os.path.join(old_scheme_seed_path,file)
-            if os.path.isdir(src):
-                continue
-            with open(src) as f:
-                dest = os.path.join(new_scheme_seed_path,'short' ,(file))
-                with open(dest,'w') as a:
-                    for line in f:
-                        a.write(line)
+        src = os.path.join(old_scheme_seed_path, file)
+        if os.path.isdir(src):
+            continue
+        with open(src) as f:
+            dest = os.path.join(new_scheme_seed_path, 'short', (file))
+            with open(dest, 'w') as a:
+                for line in f:
+                    a.write(line)
     print('finisht generating new scheme seed as updated_clustering')
-    return(new_scheme_seed_path)
-
+    return (new_scheme_seed_path)
 def prepare_loci_vs_allBlastN(Tmp_dir_blast, dir_containing_loci, output_path, makeblastdb_path):
-        '''
-        prepares the blasting of loci against all CDS
-        in this a fasta file of all loci will be created
-        from the fasta file a database will be generated
-        a fasta file will be generated of all CDS
+    '''
+    prepares the blasting of loci against all CDS
+    in this a fasta file of all loci will be created
+    from the fasta file a database will be generated
+    a fasta file will be generated of all CDS
 
 
-        :param Tmp_dir_blast: str
-            path to temporar directory blast
+    :param Tmp_dir_blast: str
+        path to temporar directory blast
 
-        :param dir_containing_loci: str
-            path containing all the loci
+    :param dir_containing_loci: str
+        path containing all the loci
 
-        :param output_path: str
-            general output pat of eutyper or working directory
+    :param output_path: str
+        general output pat of eutyper or working directory
 
-        :param makeblastdb_path:
-            path to program creating the blast db
-        :return:
+    :param makeblastdb_path:
+        path to program creating the blast db
+    :return:
 
-            blast results directory: str
-                path to directory containing the blast results
+        blast results directory: str
+            path to directory containing the blast results
 
-            blast db : str
-                file extension of the name of the blast db
+        blast db : str
+            file extension of the name of the blast db
 
-            sequentions: dic
-                dictionary of all sequentions
+        sequentions: dic
+            dictionary of all sequentions
 
-            fasta path: str
-                path to fasta file used to generate db
+        fasta path: str
+            path to fasta file used to generate db
 
 
-        '''
-        if os.path.exists(Tmp_dir_blast):
-            shutil.rmtree(Tmp_dir_blast)
-        os.makedirs(Tmp_dir_blast, exist_ok=True)
+    '''
+    if os.path.exists(Tmp_dir_blast):
+        shutil.rmtree(Tmp_dir_blast)
+    os.makedirs(Tmp_dir_blast, exist_ok=True)
 
-        beta_file = os.path.join(Tmp_dir_blast, 'pre_schema_seed.fasta')
-        blast_results_dir = os.path.join(Tmp_dir_blast, 'results_1')
-        blast_db = join_paths(Tmp_dir_blast, ['pre_schema_seed_int'])
+    beta_file = os.path.join(Tmp_dir_blast, 'pre_schema_seed.fasta')
+    blast_results_dir = os.path.join(Tmp_dir_blast, 'results_1')
+    blast_db = join_paths(Tmp_dir_blast, ['pre_schema_seed_int'])
 
-        # retrieve DIct (g_ID:original name , CDS
+    # retrieve DIct (g_ID:original name , CDS
 
-        # this part must be where the loci are stored,
-        fasta_paths = Create_fasta_for_blast(output_path, beta_file, dir_containing_loci)
-        db_stderr = make_blast_db(makeblastdb_path, beta_file, blast_db, 'nucl')
+    # this part must be where the loci are stored,
+    fasta_paths = Create_fasta_for_blast(output_path, beta_file, dir_containing_loci)
+    db_stderr = make_blast_db(makeblastdb_path, beta_file, blast_db, 'nucl')
 
-        # stop when there is an error with the creation of blast
-        if len(db_stderr) > 0:
-            sys.exit(db_stderr)
+    # stop when there is an error with the creation of blast
+    if len(db_stderr) > 0:
+        sys.exit(db_stderr)
 
-        sequentions, fasta_path = retrieve_all_sample_sequences(output_path, Tmp_dir_blast)
-        os.makedirs(blast_results_dir)
+    sequentions, fasta_path = retrieve_all_sample_sequences(output_path, Tmp_dir_blast)
+    os.makedirs(blast_results_dir)
 
-        return (blast_results_dir, blast_db, sequentions, fasta_path)
-
-def prepare_allVsall_blastN_with_genes_of_interest(allvsall_path, sequentions, makeblastdb_path, orphans_names, fasta_path=None):
+    return (blast_results_dir, blast_db, sequentions, fasta_path)
+def prepare_allVsall_blastN_with_genes_of_interest(allvsall_path, sequentions, makeblastdb_path, orphans_names,
+                                                   fasta_path=None):
     '''
     prepared blasting all cds against all cds. this is used to group orhpans together and find new loci
 
@@ -3937,7 +4161,7 @@ def prepare_allVsall_blastN_with_genes_of_interest(allvsall_path, sequentions, m
     # create fasta_files directory
     # create initiaser for database of the fastafiles directory thus enabeling the all vs all blast of only orphans
     Create_fasta_for_blast(allvsall_path, beta_file, 'fasta_files')
-    fasta_paths = os.path.join(allvsall_path,'fasta_files')
+    fasta_paths = os.path.join(allvsall_path, 'fasta_files')
     # create database
     db_stderr = make_blast_db(makeblastdb_path, beta_file, blast_db, 'nucl')
     if len(db_stderr) > 0:
@@ -3954,47 +4178,20 @@ def prepare_allVsall_blastN_with_genes_of_interest(allvsall_path, sequentions, m
         sequentions[file] = ['', path]
 
     return (blast_results_dir, sequentions, blast_db, fasta_paths, fasta_path)
-
-def copy_dir(old_scheme_seed_path,new_scheme_seed_path, symlinks=False, ignore=None):
-    '''
-    copy whole directory to another directory
-
-    :param old_scheme_seed_path: str
-        path to directory to be copied
-    :param new_scheme_seed_path: str
-        path where directories will be copied too
-
-    :param symlinks: bool
-        should symlinks be copied
-
-    :param ignore: bool
-        should copying errors be ignored
-
-    :return:
-    '''
-    for item in os.listdir(old_scheme_seed_path):
-            s = os.path.join(old_scheme_seed_path, item)
-            d = os.path.join(new_scheme_seed_path, item)
-            if os.path.isdir(s):
-                shutil.copytree(s, d, symlinks, ignore)
-            else:
-                shutil.copy2(s, d)
-    print('finisht preparing new directory for updated scheme seed')
-
-def retrieve_self_scores(blast_results_dir):
+def retrieve_self_scores(blast_results_file):
     '''
     retrieve self scores in blast results
 
 
-    :param blast_results_dir: str
-        path to directory containing blast results
+    :param blast_results_file: str
+        path to file containing blast results
 
     :return:
         self_scores: dic
             dictionary for selfhits sequenceID:selfscore
     '''
     self_scores = {}
-    with open(blast_results_dir) as f:
+    with open(blast_results_file) as f:
         for line in f:
             line = (line.split('\t'))
             line = [line[0], ((line[1].split('-@-'))[1]), line[2].rstrip()]
@@ -4002,7 +4199,6 @@ def retrieve_self_scores(blast_results_dir):
                 self_scores[line[1]] = line[2]
 
     return (self_scores)
-
 def retrieve_all_DNA(path_to_CDS_AA):
     '''
 
@@ -4020,13 +4216,13 @@ def retrieve_all_DNA(path_to_CDS_AA):
     files = [x for x in os.listdir(path_to_CDS_AA) if '.fna_protein' not in x]
 
     for file in files:
-        with open(os.path.join(path_to_CDS_AA,file)) as f:
+        with open(os.path.join(path_to_CDS_AA, file)) as f:
             file = file.split('.fna')[0]
             DNA = False
             seq = ''
             for line in f:
                 if ">" in line:
-                    if DNA :
+                    if DNA:
                         CDS[ID] = seq
                         seq = ''
                         DNA = False
@@ -4037,11 +4233,10 @@ def retrieve_all_DNA(path_to_CDS_AA):
                     DNA = True
             CDS[ID] = seq
 
-    return(CDS)
-
+    return (CDS)
 def retrieve_allele_ID(CDS):
     '''
-    retrieves the alllele ID. basicly inverts CDS_AA
+    retrieves the alllele ID. basicly inverts CDS_AA Dictionary
 
     :param CDS:
         dict containgin sequentions seqID:seq
@@ -4055,14 +4250,129 @@ def retrieve_allele_ID(CDS):
     all_CDS = CDS.values()
     all_CDS = list(dict.fromkeys(all_CDS))
     ID_seq = {}
-    count=0
+    count = 0
     for seq in all_CDS:
-        count +=1
+        count += 1
         ID_seq[seq] = count
 
-    return(ID_seq)
+    return (ID_seq)
+def distinct_loci_check(blast_results_file, BSRn):
+    '''
+    check weither all loci are distinc. they will be blasted against each other.
+    if both loci hit each other above BSRn treshold they are seemed as to simmilar
 
-def Create_MLST_scheme(self_scores, CDS, ID_seq, blast_results_path,BSRn,output_path):
+    :param blast_result_dir: str
+        path to blast results
+
+    :param BSRn: float
+        cutoff value of BSRn (0.8)
+
+    :return:
+        to_remove; list
+            list of which alleles need to be removed
+    '''
+
+    # todo i habe a function to retrieve the self scores, maybe will just use that
+    # retrieve selfscores
+    self_scores = retrieve_self_scores(blast_results_file)
+
+
+    # pre BSR check
+    # do i require to also do an exstra check on coverage or identity
+    pre_group = []
+    scores = {}
+    with open(blast_results_file) as f:
+        for line in f:
+            line = (line.split('\t'))
+            line = [line[0], ((line[1].split('-@-'))[1]), line[2].rstrip(), line[3], line[4]]
+            if line[0] != line[1]:
+                if line[0] in self_scores.keys() and line[1] in self_scores.keys():
+                    if (float(((float(line[2]) / float(self_scores[(line[1])]))))) >= BSRn:
+                        pre_group.append([line[0], line[1]])
+                        if line[0] in scores.keys():
+                            scores[line[0]].append(line)
+                        else:
+                            scores[line[0]] = [line]
+
+    # groups every list based on shared items
+    groups = []
+    while len(pre_group) > 0:
+        first, *rest = pre_group
+        first = set(first)
+        lf = -1
+        while len(first) > lf:
+            lf = len(first)
+            rest2 = []
+            for r in rest:
+                if len(first.intersection(set(r))) > 0:
+                    first |= set(r)
+                else:
+                    rest2.append(r)
+            rest = rest2
+        groups.append(first)
+        pre_group = rest
+
+    # select loci to remove based BSR value.
+    # loci who hit each other will be removed. those who doesnt wont
+    # between 2 selection will be made on the one with the lowest coverage
+    to_remove = []
+    for group in groups:
+        if len(group) == 2:
+            counter = 0
+            for element in group:
+                if element in scores.keys():
+                    counter += 1
+            if counter == 2:
+                coverages = {}
+                for element in group:
+                    coverages[(scores[element][0][4]).rstrip()] = scores[element][0][0]
+                coverage1 = []
+                for element in coverages.keys():
+                    coverage1.append(int(element))
+                try:
+                    to_remove.append(coverages[str(max(coverage1))])
+                except:
+                    continue
+
+        elif len(group) != 2:
+            for element in group:
+                self_scores = []
+                if element in scores.keys():
+                    for item in scores[element]:
+                        self_scores.append(item)
+            coverages = {}
+            for element in self_scores:
+                coverages[element[4].rstrip()] = element[0]
+            coverage1 = []
+            for element in coverages.keys():
+                coverage1.append(int(element))
+            try:
+                to_remove.append(coverages[str(max(coverage1))])
+            except:
+                continue
+
+    print('found {0} loci with high simmilarity on nucleotide level who will be removed'.format(len(to_remove)))
+    return (to_remove)
+def remove_loci(to_remove, loci_dir):
+    '''
+    removes loci in to remove list from cluster director
+
+    :param to_remove: list
+        contains the file names of loci to be removed from directory
+
+    :param loci_dir: str
+        path to directory contianing the loci sequences
+
+    :return:
+    '''
+    for file in to_remove:
+        file = os.path.join(loci_dir, (file + '.fna.fasta'))
+        os.remove(file)
+
+###########################
+# generate MLST scheme#
+#######################
+def Create_MLST_scheme(self_scores, CDS, ID_seq, blast_results_path, BSRn, output_path):
     '''
     generates basis of MLST scheme and statistics
     it is the first check and assigns allle and their ID to loci in a dictionary
@@ -4095,12 +4405,12 @@ def Create_MLST_scheme(self_scores, CDS, ID_seq, blast_results_path,BSRn,output_
     genomes = {}
     blast_results = {}
     MBSRn = (1 - BSRn) + 1
-    #create dict of blast results. gene:[hits]
+    # create dict of blast results. gene:[hits]
     with open(blast_results_path) as f:
         for line in f:
             line = line.split('\t')
             line = [line[0], ((line[1].split('-@-'))[1]), line[2], line[3], line[4].rstrip()]
-            genome = (line[0].split('_',1)[1])
+            genome = (line[0].split('_', 1)[1])
             if genome not in genomes.keys():
                 genomes[genome] = {}
 
@@ -4110,245 +4420,110 @@ def Create_MLST_scheme(self_scores, CDS, ID_seq, blast_results_path,BSRn,output_
             else:
                 blast_results[line[0]].append(line)
 
-    #generate statistics dict
-    items = ['EXC','INF',"ANF","PANF",'ASM',"ALM","LNF","NIPH","NIPHEM","singlets"]
-    statistics = dict.fromkeys(items,0)
+    # generate statistics dict
+    items = ['EXC', 'INF', "ANF", "PANF", 'ASM', "ALM", "LNF", "NIPH", "NIPHEM", "singlets"]
+    statistics = dict.fromkeys(items, 0)
 
-    genome_statistics = {i:deepcopy(statistics) for i in genomes}
-
+    genome_statistics = {i: deepcopy(statistics) for i in genomes}
 
     gene_assigned_to_loci = {}
     ########################################
     # ALLELE    calling and loci assignment#
     ########################################
-    #generates a dictionary
+    # generates a dictionary
     # key =- the gene
     # value is to what loci it alligns best
-    genome_old ="k"
+    genome_old = "k"
     for k, v in blast_results.items():
         genome = (k.split('_', 1)[1])
         if len(v) == 1:
-                BSR_score = (float((v[0][2]))) / float(self_scores[v[0][1]])
-                if BSR_score >= BSRn and BSR_score <= MBSRn:
-                    #decide weither EXC or INF
-                    if(CDS[v[0][1]]) == (CDS[v[0][0]]):
-                        genome_statistics[genome]['EXC'] += 1
-                    else:
-                        genome_statistics[genome]['INF'] += 1
-                    gene_assigned_to_loci[k] = v[0][1]
-                    
-
-
-                #asigining LNF when loci is nog found, should not happen with orphan clustering
+            BSR_score = (float((v[0][2]))) / float(self_scores[v[0][1]])
+            if BSR_score >= BSRn and BSR_score <= MBSRn:
+                # decide weither EXC or INF
+                if (CDS[v[0][1]]) == (CDS[v[0][0]]):
+                    genome_statistics[genome]['EXC'] += 1
                 else:
-                    genome_statistics[genome]['LNF'] += 1
+                    genome_statistics[genome]['INF'] += 1
+                gene_assigned_to_loci[k] = v[0][1]
+
+
+
+            # asigining LNF when loci is nog found, should not happen with orphan clustering
+            else:
+                genome_statistics[genome]['LNF'] += 1
 
         elif len(v) != 1:
 
+            tmp_hits = []
+            # BSR calling on the genes , if multiple pass BSR, query on identity
+
+            for i in v:
+                BSR_score = (float((i[2]))) / float(self_scores[i[1]])
+                if BSR_score >= BSRn and BSR_score <= MBSRn:
+                    tmp_hits.append(i)
+
+            # when a allele have a blast hit on multiple loci above BSRn
+            # hits will be evaluated by idenity and query coverage with multiplying
+            # best score is the one with the highest hit
+            if len(tmp_hits) != 1:
+                tmp_dict = {}
+
+                for i in tmp_hits:
+                    times = float(i[3]) * float(i[4])
+                    tmp_dict[times] = i
+
                 tmp_hits = []
-                #BSR calling on the genes , if multiple pass BSR, query on identity
+                tmp_hits.append(list((tmp_dict[(max(tmp_dict))])))
 
-
-                for i in v:
-                    BSR_score = (float((i[2]))) / float(self_scores[i[1]])
-                    if BSR_score >= BSRn and BSR_score <= MBSRn:
-                        tmp_hits.append(i)
-
-                #when a allele have a blast hit on multiple loci above BSRn
-                #hits will be evaluated by idenity and query coverage with multiplying
-                #best score is the one with the highest hit
                 if len(tmp_hits) != 1:
-                    tmp_dict = {}
-
-                    for i in tmp_hits:
-                        times = float(i[3]) * float(i[4])
-                        tmp_dict[times] = i
-
-
-                    tmp_hits = []
-                    tmp_hits.append(list((tmp_dict[(max(tmp_dict))])))
-
-                    if len(tmp_hits) != 1:
-                        print("something is serious wrong with the allele calling algorithm\nplease contact authors\n"
-                              "This could also occour when there has been tempering with the schemeseed directory")
-                        exit()
-                    gene_assigned_to_loci[k] = tmp_hits[0][1]
-                    if(CDS[tmp_hits[0][1]]) == (CDS[tmp_hits[0][0]]):
-                        genome_statistics[genome]['EXC'] += 1
-                    else:
-                        genome_statistics[genome]['INF'] += 1
-
+                    print("something is serious wrong with the allele calling algorithm\nplease contact authors\n"
+                          "This could also occour when there has been tempering with the schemeseed directory")
+                    exit()
+                gene_assigned_to_loci[k] = tmp_hits[0][1]
+                if (CDS[tmp_hits[0][1]]) == (CDS[tmp_hits[0][0]]):
+                    genome_statistics[genome]['EXC'] += 1
                 else:
-                    gene_assigned_to_loci[k] = tmp_hits[0][1]
-                    if(CDS[tmp_hits[0][1]]) == (CDS[tmp_hits[0][0]]):
-                        genome_statistics[genome]['EXC'] += 1
-                    else:
-                        genome_statistics[genome]['INF'] += 1
+                    genome_statistics[genome]['INF'] += 1
 
+            else:
+                gene_assigned_to_loci[k] = tmp_hits[0][1]
+                if (CDS[tmp_hits[0][1]]) == (CDS[tmp_hits[0][0]]):
+                    genome_statistics[genome]['EXC'] += 1
+                else:
+                    genome_statistics[genome]['INF'] += 1
 
-
-
-    #generate dictionary required
+    # generate dictionary required
     loci_gene = {loci: [] for loci in (self_scores.keys())}
-    #assign genes to loci in format, looping this directly cause the weird bug, that you will only find
+    # assign genes to loci in format, looping this directly cause the weird bug, that you will only find
     # the last gene in every dict genome
     # so the loci contain the names of sequences in a list
-    for gene,loci in gene_assigned_to_loci.items():
+    for gene, loci in gene_assigned_to_loci.items():
         loci_gene[loci].append(gene)
 
-    #generate list of genomes as input
+    # generate list of genomes as input
     genomes = (list(genomes.keys()))
 
-    #loop through the items, for each gene will a different tmp_dict be created
-    #the tmp dict is genome name and then the sequences ID
+    # loop through the items, for each gene will a different tmp_dict be created
+    # the tmp dict is genome name and then the sequences ID
     # needs to be called everytime again to prevent bug, otherwise will not start empty
-    #the if else statement is if the genome has multiple genes who assign the the same loci
+    # the if else statement is if the genome has multiple genes who assign the the same loci
     for loci, genes in loci_gene.items():
         genome_dict = dict.fromkeys(genomes)
         tmp_dict = genome_dict
 
         for i in genes:
 
-            genome = (i.split('_',1)[1])
+            genome = (i.split('_', 1)[1])
             i = (ID_seq[CDS[i]])
             if tmp_dict[genome] == None:
                 tmp_dict[genome] = str(i)
             else:
-                tmp_dict[genome] = (str(tmp_dict[genome]) +','+ str(i))
+                tmp_dict[genome] = (str(tmp_dict[genome]) + ',' + str(i))
 
         loci_gene[loci] = tmp_dict
 
-
-
-    return(genome_statistics, loci_gene)
-
-def distinct_loci_check(blast_result_dir, BSRn):
-    '''
-    check weither all loci are distinc. they will be blasted against each other.
-    if both loci hit each other above BSRn treshold they are seemed as to simmilar
-
-    :param blast_result_dir: str
-        path to blast results
-
-    :param BSRn: float
-        cutoff value of BSRn (0.8)
-
-    :return:
-        to_remove; list
-            list of which alleles need to be removed
-    '''
-
-    #retrieve selfscores
-    self_scores = {}
-    hits = []
-    with open(blast_result_dir) as f:
-        for line in f:
-            line = (line.split('\t'))
-            line = [line[0], ((line[1].split('-@-'))[1]), line[2].rstrip()]
-
-            if line[0] == line[1]:
-                self_scores[line[1]] = line[2]
-                if line[0] not in hits:
-                    hits.append(line[0])
-
-    #pre BSR check
-    #do i require to also do an exstra check on coverage or identity
-    pre_group = []
-    scores={}
-    with open(blast_result_dir) as f:
-            for line in f:
-                line = (line.split('\t'))
-                line = [line[0], ((line[1].split('-@-'))[1]), line[2].rstrip(), line[3], line[4]]
-                if line[0] != line[1]:
-                    if line[0] in hits and line[1] in hits:
-                        if (float(((float(line[2]) / float(self_scores[(line[1])]))))) >= BSRn:
-                                pre_group.append([line[0],line[1]])
-                                if line[0] in scores.keys():
-                                    scores[line[0]].append(line)
-                                else:
-                                    scores[line[0]] = [line]
-
-    #groups every list based on shared items
-    groups = []
-    while len(pre_group) > 0:
-        first, *rest = pre_group
-        first = set(first)
-        lf = -1
-        while len(first) > lf:
-            lf = len(first)
-            rest2 = []
-            for r in rest:
-                if len(first.intersection(set(r))) > 0:
-                    first |= set(r)
-                else:
-                    rest2.append(r)
-            rest = rest2
-        groups.append(first)
-        pre_group = rest
-
-    #select loci to remove based BSR value.
-    #loci who hit each other will be removed. those who doesnt wont
-    #between 2 selection will be made on the one with the lowest coverage
-    to_remove = []
-    for group in groups:
-        if len(group) == 2:
-            counter = 0
-            for element in group:
-                if element in scores.keys():
-                    counter += 1
-            if counter == 2:
-                coverages = {}
-                for element in group:
-                    coverages[(scores[element][0][4]).rstrip()] = scores[element][0][0]
-                coverage1=[]
-                for element in coverages.keys():
-                    coverage1.append(int(element))
-                try:
-                    to_remove.append(coverages[str(max(coverage1))])
-                except:
-                    continue
-
-        elif len(group) != 2:
-            for element in group:
-                self_scores = []
-                if element in scores.keys():
-                   for item in scores[element]:
-                        self_scores.append(item)
-            coverages = {}
-            for element in self_scores:
-                coverages[element[4].rstrip()] = element[0]
-            coverage1 =[]
-            for element in coverages.keys():
-
-                coverage1.append(int(element))
-            try:
-                to_remove.append(coverages[str(max(coverage1))])
-            except:
-                continue
-
-
-    print('found {0} loci with high simmilarity on nucleotide level who will be removed'.format(len(to_remove)))
-    return(to_remove)
-
-def remove_loci(to_remove,loci_dir):
-
-    '''
-    removes loci in to remove list from cluster director
-
-    :param to_remove: list
-        contains the file names of loci to be removed from directory
-
-    :param loci_dir: str
-        path to directory contianing the loci sequences
-
-    :return:
-    '''
-    for file in to_remove:
-        file = os.path.join(loci_dir,(file+'.fna.fasta'))
-        os.remove(file)
-
+    return (genome_statistics, loci_gene)
 def edit_scheme(genome_statistics, loci_scheme, ID_seq, CDS, output_dir, order=True):
-
     '''
     revamps the first mlst SCHeme. assignes new ID on a normal way isntead of loci ID 19854 will be 1 to N(max genes)
     also updated the statitics param and orders the MSLT scheme from less allele not found to only one hit per locus
@@ -4398,6 +4573,7 @@ def edit_scheme(genome_statistics, loci_scheme, ID_seq, CDS, output_dir, order=T
     print('start rewriting MLST scheme and write out locus fasta files')
     # go through nested dictionary which makes the scheme seed
     for locus, value in loci_scheme.items():
+
         locus_id += 1
         allele_id = 0
 
@@ -4410,16 +4586,16 @@ def edit_scheme(genome_statistics, loci_scheme, ID_seq, CDS, output_dir, order=T
             TMP_dic[locus][i[0]] = {}
             TMP_dic[locus][i[0]]['old_seq_id'] = i[1]
 
-            #some loci seeds have a , to solve bug if else statement
+            # some loci seeds have a , to solve bug if else statement
             if i[1] != None:
                 if ',' in i[1]:
                     TMP_seqs = []
-                    #append NIPH becouse paralogous hits
+                    # append NIPH becouse paralogous hits
                     genome_statistics[i[0]]['NIPH'] += 1
                     ii = i[1].split(',')
                     for iii in ii:
                         TMP_seqs.append(seq_id[int(iii)])
-                        id_name[iii]=i[0]
+                        id_name[iii] = i[0]
 
                     a_set = set(TMP_seqs)
                     if len(a_set) != len(TMP_seqs):
@@ -4449,7 +4625,6 @@ def edit_scheme(genome_statistics, loci_scheme, ID_seq, CDS, output_dir, order=T
                                 allele_id += 1
                                 TMP_seq_ID[id] = {}
                                 TMP_seq_ID[id]['ID'] = allele_id
-
                 # add ANF (ALLELE NOT FOUD to scheme but also to statistics
                 else:
                     TMP_seq_ID[i[1]] = {}
@@ -4463,8 +4638,11 @@ def edit_scheme(genome_statistics, loci_scheme, ID_seq, CDS, output_dir, order=T
                     else:
                         tmp_id = ''
                         for id in ID:
-                            tmp_id = tmp_id + str(TMP_seq_ID[id]['ID'])
-                        TMP_dic[locus][i[0]]['new_seq_id'] = (','.join(tmp_id))
+                            # insert comma in start to prevent a bug from occouring.
+                            # this first comma will later be removed
+                            tmp_id = tmp_id + ',' + str(TMP_seq_ID[id]['ID'])
+
+                        TMP_dic[locus][i[0]]['new_seq_id'] = (tmp_id[1:])
 
                 else:
                     TMP_dic[locus][i[0]]['new_seq_id'] = TMP_seq_ID[i[1]]['ID']
@@ -4476,7 +4654,6 @@ def edit_scheme(genome_statistics, loci_scheme, ID_seq, CDS, output_dir, order=T
             if (TMP_dic[locus][i[0]]['old_seq_id']) != None:
                 # becouse there are paralogus, they have ,. this causea a bug with looking up the new ID
                 OLD_ID = ((TMP_dic[locus][i[0]]['old_seq_id']).split(','))
-
                 if len(OLD_ID) == 1:
                     sequention = (seq_id[int(OLD_ID[0])])
                     TMP_seq_ID[i[1]]['seq'] = sequention
@@ -4497,19 +4674,17 @@ def edit_scheme(genome_statistics, loci_scheme, ID_seq, CDS, output_dir, order=T
         # retrieve all sequention lengths and create a dic of length and count
         for seq in TMP_seq_ID.values():
             if seq["seq"] != None:
-                    lengths.append(([(len(seq['seq']))])[0])
+                lengths.append(([(len(seq['seq']))])[0])
 
         # calculate median
         n = len(lengths)
         lengths = sorted(lengths)
         if n % 2 == 0:
-            median1 = lengths[n//2]
-            median2 = lengths[n//2 -1]
-            median = (median1+median2)/2
+            median1 = lengths[n // 2]
+            median2 = lengths[n // 2 - 1]
+            median = (median1 + median2) / 2
         else:
-            median = lengths[n//2]
-
-
+            median = lengths[n // 2]
 
         # assign ASM or ALM if needed
 
@@ -4523,7 +4698,6 @@ def edit_scheme(genome_statistics, loci_scheme, ID_seq, CDS, output_dir, order=T
                 elif diff <= 80.0:
                     genome_statistics[(id_name[k])]["ASM"] += 1
 
-
         # assign locus ID to Dict
         TMP_seq_ID[None] = {}
         TMP_seq_ID[None]['locus_id'] = locus_id
@@ -4532,13 +4706,11 @@ def edit_scheme(genome_statistics, loci_scheme, ID_seq, CDS, output_dir, order=T
         ###################################################
         # add tmp dict with new locus ID to newscheme dict#
         ###################################################
-
         new_scheme[('Locus_ID_' + str(locus_id))] = {}
         for k, v in TMP_dic.items():
             for i in v:
                 new_scheme[('Locus_ID_' + str(locus_id))][i] = TMP_dic[k][i]['new_seq_id']
-
-        ####################################################
+        ############################
         # write out locus sequentions########################
         ####################################################
 
@@ -4555,125 +4727,118 @@ def edit_scheme(genome_statistics, loci_scheme, ID_seq, CDS, output_dir, order=T
     MLST_scheme = pd.DataFrame(new_scheme)
     MLST_scheme = MLST_scheme.transpose()
 
-    return(MLST_scheme,genome_statistics,dir,locus_dir)
-
+    return (MLST_scheme, genome_statistics, dir, locus_dir)
 def statistics_ordering_mlst_scheme(MLST_scheme, genome_statistics, order):
-        columns = (MLST_scheme.columns)
-        rows = list(MLST_scheme.index)
+    columns = (MLST_scheme.columns)
+    rows = list(MLST_scheme.index)
 
-        ##########################
-        # add ANF count ad each column
-        # ########################################
+    ##########################
+    # add ANF count ad each column
+    # ########################################
 
-        print('start calculating ANF (allele not found) and organising based on results')
-        # generate count of ANF and inmport in dataframe
-        # generate dict
-        ANF_DIC = {}
-        ANF_DIC['sum_ANF'] = {}
+    print('start calculating ANF (allele not found) and organising based on results')
+    # generate count of ANF and inmport in dataframe
+    # generate dict
+    ANF_DIC = {}
+    ANF_DIC['sum_ANF'] = {}
+    for row in rows:
+        ANF_counter = 0
+        for data in (MLST_scheme.loc[row]):
+            if data == "ANF":
+                ANF_counter += 1
+
+        ANF_DIC['sum_ANF'][row] = ANF_counter
+
+    # add dataframe to previous one. transpose is to switch column and rownames to make it fit
+    ANF_DIC = (pd.DataFrame(ANF_DIC))
+    MLST_scheme = MLST_scheme.join(ANF_DIC['sum_ANF'])
+
+    #################################
+    # order MLST scheme#
+    ########################
+    order_scheme = {}
+    if order:
         for row in rows:
-            ANF_counter = 0
-            for data in (MLST_scheme.loc[row]):
-                if data == "ANF":
-                    ANF_counter += 1
+            if (MLST_scheme['sum_ANF'][row]) not in order_scheme.keys():
+                order_scheme[(MLST_scheme['sum_ANF'][row])] = []
+            order_scheme[(MLST_scheme['sum_ANF'][row])].append(row)
 
-            ANF_DIC['sum_ANF'][row] = ANF_counter
+        order_sum_anf = []
+        for number in (sorted(order_scheme.keys())):
+            for locus_ID in order_scheme[number]:
+                order_sum_anf.append(locus_ID)
 
-        # add dataframe to previous one. transpose is to switch column and rownames to make it fit
-        ANF_DIC = (pd.DataFrame(ANF_DIC))
-        MLST_scheme = MLST_scheme.join(ANF_DIC['sum_ANF'])
+        MLST_scheme = MLST_scheme.reindex(order_sum_anf)
 
+    ##################################
+    # add ANF % column at dataframe#
+    ################################
+    print('start calculating % ANF and % consersive genes')
+    max_loci = len(rows)
+    perc_ANF = {}
+    total = 0
+    for i in genome_statistics.keys():
+        percentage = genome_statistics[i]['ANF'] / max_loci * 100
+        perc_ANF[i] = percentage
+        genome_statistics[i]['PANF'] = percentage
+        total += percentage
+    perc_ANF['sum_Ang'] = total
 
-        #################################
-        # order MLST scheme#
-        ########################
-        order_scheme = {}
-        if order:
-            for row in rows:
-                if (MLST_scheme['sum_ANF'][row]) not in order_scheme.keys():
-                    order_scheme[(MLST_scheme['sum_ANF'][row])] = []
-                order_scheme[(MLST_scheme['sum_ANF'][row])].append(row)
+    MLST_scheme.loc["percentage of ANF"] = (perc_ANF.values())
 
-            order_sum_anf = []
-            for number in (sorted(order_scheme.keys())):
-                for locus_ID in order_scheme[number]:
-                    order_sum_anf.append(locus_ID)
+    #####################
+    # calculate singlets#
+    #####################
 
-            MLST_scheme = MLST_scheme.reindex(order_sum_anf)
+    # generate dataframe containing only the singlets
+    signlets = MLST_scheme.loc[MLST_scheme['sum_ANF'] == (len(columns)) - 1]
 
-        ##################################
-        # add ANF % column at dataframe#
-        ################################
-        print('start calculating % ANF and % consersive genes')
-        max_loci = len(rows)
-        perc_ANF = {}
-        total = 0
-        for i in genome_statistics.keys():
-            percentage = genome_statistics[i]['ANF'] / max_loci * 100
-            perc_ANF[i] = percentage
-            genome_statistics[i]['PANF'] = percentage
-            total += percentage
-        perc_ANF['sum_Ang'] = total
+    for index, row in signlets.iterrows():
+        for column in columns:
+            if row[column] == (1):
+                genome_statistics[column]['singlets'] += 1
 
-        MLST_scheme.loc["percentage of ANF"] =(perc_ANF.values())
+    #############################
+    # calculate amount of different alleles#
+    #############################
+    N_alleles = {}
+    N_alleles['number of different alleles'] = {}
 
+    for index, row in MLST_scheme.iterrows():
+        Tmp_list = []
+        for item in row:
+            # to remove the ANF amount
+            if '.' not in str(item) and 'ANF' not in str(item):
+                if item not in Tmp_list:
+                    Tmp_list.append(item)
+        N_alleles['number of different alleles'][index] = len(Tmp_list)
 
-        #####################
-        # calculate singlets#
-        #####################
+    N_alleles = pd.DataFrame(N_alleles)
+    MLST_scheme = MLST_scheme.join(N_alleles['number of different alleles'])
 
-        #generate dataframe containing only the singlets
-        signlets = MLST_scheme.loc[MLST_scheme['sum_ANF'] == (len(columns)) - 1]
+    ##############
+    # order index#
+    ##############
+    if order:
+        order_sum_anf.insert(0, "percentage of ANF")
+        MLST_scheme = MLST_scheme.reindex((order_sum_anf))
 
-        for index, row in signlets.iterrows():
-            for column in columns:
-                if row[column] == (1):
-                    genome_statistics[column]['singlets'] +=1
+    else:
+        rows.insert(0, "percentage of ANF")
+        MLST_scheme = MLST_scheme.reindex((rows))
 
+    ################
+    # order columns#
+    ################
+    columns = list(columns)
+    columns.insert(0, 'number of different alleles')
+    columns.insert(0, 'sum_ANF')
 
+    MLST_scheme = MLST_scheme.reindex(columns=columns)
+    statistics = (pd.DataFrame(genome_statistics).transpose())
 
-        #############################
-        # calculate amount of different alleles#
-        #############################
-        N_alleles = {}
-        N_alleles['number of different alleles'] = {}
-
-        for index, row in MLST_scheme.iterrows():
-            Tmp_list = []
-            for item in row:
-                #to remove the ANF amount
-                if '.' not in str(item) and 'ANF' not in str(item):
-                    if item not in Tmp_list:
-                        Tmp_list.append(item)
-            N_alleles['number of different alleles'][index] = len(Tmp_list)
-
-        N_alleles = pd.DataFrame(N_alleles)
-        MLST_scheme = MLST_scheme.join(N_alleles['number of different alleles'])
-
-        ##############
-        # order index#
-        ##############
-        if order:
-            order_sum_anf.insert(0,"percentage of ANF")
-            MLST_scheme = MLST_scheme.reindex((order_sum_anf))
-
-        else:
-            rows.insert(0,"percentage of ANF")
-            MLST_scheme = MLST_scheme.reindex((rows))
-
-        ################
-        # order columns#
-        ################
-        columns = list(columns)
-        columns.insert(0, 'number of different alleles')
-        columns.insert(0, 'sum_ANF')
-
-        MLST_scheme = MLST_scheme.reindex(columns=columns)
-        statistics = (pd.DataFrame(genome_statistics).transpose())
-
-        return(MLST_scheme,statistics)
-
+    return (MLST_scheme, statistics)
 def remove_columns(scheme):
-
     # remove unnecary allelels.
     # should be editied for cg and wg genome but try except statements should always work
     try:
@@ -4691,25 +4856,19 @@ def remove_columns(scheme):
         print("")
 
     return (scheme)
-
 def convert_scheme_to_binary(scheme):
+    # convert all paralous hit who contain a , to 1 as debug or else will be seen as ANF
 
-    #convert all paralous hit who contain a , to 1 as debug or else will be seen as ANF
-
-    print(scheme)
-    scheme = scheme.replace({',':'.'},regex=True)
+    scheme = scheme.replace({',': '.'}, regex=True)
     # covnert all non numertic (ANF) to 0
-    print(scheme)
     scheme = scheme.apply(pd.to_numeric, errors='coerce').fillna(0)
     # every number equal or higher then 1.0 will be changed to 1.0
     scheme[scheme >= 1.0] = 1.0
     # convert back to int
     scheme = scheme.astype(int)
-    print(scheme)
 
-    return(scheme)
-def safe_scheme_statistics(MLST_scheme,statistics , wg_mlst_path):
-
+    return (scheme)
+def safe_scheme_statistics(MLST_scheme, statistics, wg_mlst_path):
     '''
     safes down statistics and wgMLST scheme
 
@@ -4725,42 +4884,42 @@ def safe_scheme_statistics(MLST_scheme,statistics , wg_mlst_path):
     '''
     print('writing statistics and wg_MLST scheme out to TSV and xlsx format')
 
-    #switch rows to columns becouse max rows is 104857 and col is 16384 which is easily exceeded
+    # switch rows to columns becouse max rows is 104857 and col is 16384 which is easily exceeded
     try:
         MLST_scheme.to_pickle(os.path.join(wg_mlst_path, 'wg_MLST.pck'))
         MLST_scheme.to_excel(os.path.join(wg_mlst_path, 'wg_MLST.xlsx'))
-        MLST_scheme.to_csv(os.path.join(wg_mlst_path,'wg_MLST.tsv'),sep='\t')
+        MLST_scheme.to_csv(os.path.join(wg_mlst_path, 'wg_MLST.tsv'), sep='\t')
     except:
-        MLST_scheme.to_csv(os.path.join(wg_mlst_path,'wg_MLST.tsv'),sep='\t')
+        MLST_scheme.to_csv(os.path.join(wg_mlst_path, 'wg_MLST.tsv'), sep='\t')
         print("unable to write to CSV")
     try:
         statistics.to_excel(os.path.join(wg_mlst_path, 'statistics.xlsx'))
-        statistics.to_csv(os.path.join(wg_mlst_path,'statistics.tsv'),sep='\t')
+        statistics.to_csv(os.path.join(wg_mlst_path, 'statistics.tsv'), sep='\t')
     except:
-        statistics.to_csv(os.path.join(wg_mlst_path,'statistics.tsv'),sep='\t')
+        statistics.to_csv(os.path.join(wg_mlst_path, 'statistics.tsv'), sep='\t')
 
-    #create Binary file
+    # create Binary file
     scheme = remove_columns(MLST_scheme)
     scheme = convert_scheme_to_binary(scheme)
-    scheme.to_csv(os.path.join(wg_mlst_path, 'wg_mlst_binary.tsv'), sep='\t')
-
-def sum_anf_stats(scheme,output_path):
-    #get scheme as dict per row
+    scheme.to_csv(os.path.join(wg_mlst_path, 'wgMLST_binary.tsv'), sep='\t')
+    scheme.to_excel(os.path.join(wg_mlst_path, 'wgMLST_binary.xlsx'))
+def sum_anf_stats(scheme, output_path):
+    # get scheme as dict per row
     scheme = (scheme.to_dict(orient='records'))
     Sum_ANF_count = {}
-    #used to skip the percentage anf row
+    # used to skip the percentage anf row
     percentage_anf_to_be_skipped = True
     for k in scheme:
         if percentage_anf_to_be_skipped == True:
             percentage_anf_to_be_skipped = False
             continue
 
-        for name,value in k.items():
-            #retrieve sumAnf
+        for name, value in k.items():
+            # retrieve sumAnf
             if name == 'sum_ANF':
                 sum_ANF = value
             elif name != 'number of different alleles':
-                #generate dictionary
+                # generate dictionary
                 if name not in Sum_ANF_count.keys():
                     Sum_ANF_count[name] = {}
                 if value != "ANF":
@@ -4772,11 +4931,10 @@ def sum_anf_stats(scheme,output_path):
     Sum_ANF_count = pd.DataFrame(Sum_ANF_count)
     Sum_ANF_count = Sum_ANF_count.fillna(0)
     Sum_ANF_count.to_csv(os.path.join(output_path, 'sum_ANF_count.tsv'), sep='\t')
-
 def generate_statistics_format_for_R(path):
     splitted_fasta_path = os.path.join(path, 'temp', '1_splitted_fasta')
     splitted_augustus_path = os.path.join(path, 'temp', '2_augustus_output')
-    files_path = os.path.join(path,'CDS_AA')
+    files_path = os.path.join(path, 'CDS_AA')
     #####amount of contigs####
     ####lewngt of contig and total#
     #################################
@@ -4889,13 +5047,338 @@ def generate_statistics_format_for_R(path):
     df = pd.DataFrame((genes_per_contig))
     output_path = os.path.join(path, 'statistics_Ngenes_per_contig.tsv')
     df.to_csv(output_path, sep='\t')
+
+def create_schema_structure(schema_seed_fasta, output_directory,
+                            temp_directory, schema_name):
+    """ Creates the schema seed directory with one FASTA file per
+        distinct locus and the `short` directory with the FASTA files
+        used to save the representative sequences.
+        Parameters
+        ----------
+        schema_seed_fasta : str
+            Path to the FASTA file that contains the sequences that
+            constitute the schema seed. Each FASTA record in the file
+            is a representative sequence chosen for a locus.
+        output_directory : str
+            Path to the main output directory of the process.
+        temp_directory : str
+            Path to the directory where the FASTA file with the
+            records for the schema seed will be saved to.
+        schema_name : str
+            Name for the schema's directory.
+        Returns
+        -------
+        schema_files : list
+            List with the paths to the FASTA files in the schema seed.
+    """
+    CHAR_REPLACEMENTS = [("|", "_"), ("_", "-"), ("(", ""),
+                         (")", ""), ("'", ""), ("\"", ""), (":", "")]
+    # add allele identifier to all sequences
+    schema_records = ['>{0}\n{1}'.format(replace_multiple_characters(rec.id, CHAR_REPLACEMENTS) + '_1', str(rec.seq))
+                      for rec in SeqIO.parse(schema_seed_fasta, 'fasta')]
+
+    final_records = os.path.join(temp_directory, 'schema_seed_final.fasta')
+    write_lines(schema_records, final_records)
+
+    schema_dir = join_paths(output_directory, [schema_name])
+    create_directory(schema_dir)
+
+    # create directory and schema files
+    filenames = (record.id[:-2] for record in SeqIO.parse(final_records, 'fasta'))
+    schema_files = split_fasta(final_records, schema_dir, 1, filenames)
+    create_short(schema_files, schema_dir)
+
+    return schema_files
+
+############################################
+# blast scheme loci on local NCBI database #
+############################################
+
+def create_fasta_for_blast_of_loci(locus_seq, wg_mlst_path):
+    fasta_path = os.path.join(wg_mlst_path, 'loci.fasta')
+    with open(fasta_path, 'w') as f:
+        for locus, seq in locus_seq.items():
+            f.write('>{0}\n'.format(locus))
+            f.write('{0}\n'.format(seq))
+
+    return (fasta_path)
+def run_blastn_for_loci(blast_path, blast_db, fasta_file, blast_output,
+                        max_hsps=1, threads=1, ids_file=None, blast_task=None,
+                        max_targets=None, ignore=None, e_value='0.0001'):
+    """ Execute BLAST to align sequences in a FASTA file
+        against a BLAST database.
+        Parameters
+        ----------
+        blast_path : str
+            Path to BLAST executables.
+        blast_db : str
+            Path to the BLAST database.
+        fasta_file : str
+            Path to the FASTA file with sequences to
+            align against the BLAST database.
+        blast_output : str
+            Path to the file that will be created to
+            store BLAST results.
+        max_hsps : int
+            Maximum number of High Scoring Pairs per
+            pair of aligned sequences.
+        threads : int
+            Number of threads/cores used to run BLAST.
+        ids_file : str
+            Path to a file with sequence identifiers,
+            one per line. Sequences will only be alignlsed
+            to the sequences in the BLAST database that
+            have any of the identifiers in this file.
+        blast_task : str
+            Type of BLAST task.
+        max_targets : int
+            Maximum number of target/subject sequences
+            to align against.
+        ignore : list or None
+            List with BLAST warnings that should be ignored.
+        Returns
+        -------
+        stderr : str
+            String with errors raised during BLAST execution.
+    """
+
+    blast_args = [blast_path, '-db', blast_db, '-query', fasta_file,
+                  '-out', blast_output, '-outfmt', '6 qseqid sseqid bitscore  pident  qcovus'
+                                                   ' stitle  ',
+                  '-max_hsps', str(max_hsps), '-num_threads', str(threads),
+                  '-evalue', e_value]
+
+    if ids_file is not None:
+        blast_args.extend(['-seqidlist', ids_file])
+    if blast_task is not None:
+        blast_args.extend(['-task', blast_task])
+    if max_targets is not None:
+        blast_args.extend(['-max_target_seqs', str(max_targets)])
+
+    blast_proc = subprocess.Popen(blast_args,
+                                  stdout=subprocess.PIPE,
+                                  stderr=subprocess.PIPE)
+
+    stderr = blast_proc.stderr.readlines()
+
+    if len(stderr) > 0:
+        stderr = decode_str(stderr, 'utf8')
+        if ignore is not None:
+            stderr = filter_list(stderr, ignore)
+    return stderr
+def Blast_loci(output_dir, cpu_cores, custom_blast_locus_db):
+    '''
+    Blast the reference sequence of the locus (CDS) to an local installed NCBI nucleotides dataabase
+    - reads in the reference sequence of a locus
+    - blast through all local installed databases (must be in same directory)
+
+    :param output_dir: str
+        path to wokring dir
+    :param cpu_cores: int
+        amount of CPU the algorithm is allowed to use
+    :param custom_blast_locus_db: str
+        path to custome blast database
+    :return: str
+        path where results are
+    '''
+
+    # get directorys
+    wg_mlst_path = os.path.join(output_dir, 'wgMLST_scheme')
+    locus_dir = os.path.join(wg_mlst_path, 'locus_seq')
+
+    loci_blast_result = os.path.join(wg_mlst_path, 'blast_output')
+    os.makedirs(loci_blast_result, exist_ok=True)
+
+    # retrieve locusses and the ref seq
+    files = os.listdir(locus_dir)
+    locus_seq = {}
+
+    # retrieve reference sequence of a locus
+    # is done by the going throuigh the file
+    # every locus ref sequence starts with >locus
+    # check on ref seq is found is done
+    # next sequences lines are added to seq.
+    # if the allele id header is found will safe all sequences and beak
+    # for loop
+    for file in files:
+        file1 = os.path.join(locus_dir, file)
+        seq = ''
+        ref_seq = False
+        with open(file1) as f:
+            for line in f:
+                if '>locus' in line:
+                    ref_seq = True
+                elif ">" in line:
+                    locus_seq[file] = seq
+                    break
+                else:
+                    if ref_seq:
+                        seq += line.rstrip()
+
+    # generates blast directory
+    blast_dir = os.path.join(wg_mlst_path, 'Blast_loci_results')
+    os.makedirs(blast_dir, exist_ok=True)
+
+    BLASTN_ALIAS = 'blastn.exe' if platform.system() == 'Windows' else 'blastn'
+    blast_path = ''
+    blastn_path = os.path.join(blast_path, BLASTN_ALIAS)
+
+    fasta_path = create_fasta_for_blast_of_loci(locus_seq, wg_mlst_path)
+    # generate types of databases
+    # local NCBI database is not a single one, it are various
+    # this will solve the part that there are various databases which all requires to be blasted against.
+    databases = os.listdir(custom_blast_locus_db)
+    databases1 = []
+    for database in databases:
+        database = database.rsplit('.', 1)
+        if database[0] not in databases1:
+            databases1.append(database[0])
+
+    print('BLASTing loci sequences against {0} custome database...... '.format(len(databases1)))
+    print('this can take a while')
+    count = 0
+    # blast all reference sequencions through all databases
+    for database in databases1:
+        count += 1
+        print('working on database {0}/{1}'.format(count, len(databases1)))
+        blast_output = '{0}/{1}_loci_blast_out.tsv'.format(loci_blast_result, database)
+        custom_blast_locus_db1 = os.path.join(custom_blast_locus_db, database)
+        blast_stderr = run_blastn_for_loci(blastn_path, custom_blast_locus_db1, fasta_path,
+                                           blast_output, 1, cpu_cores)
+
+        if len(blast_stderr) >= 1:
+            print(blast_stderr)
+
+    return (loci_blast_result)
+def evaluate_blast_results(blast_output, identity_cutoff, coverage_cutoff, output_dir):
+    '''
+    Evaluates the blast result accoring Intensity and coverage.
+    :param blast_output: str
+        path to direcotry containing the blast output files
+    :param identity_cutoff: int
+        minimal amount of identity required to be seen valid
+    :param coverage_cutoff: int
+        minimal amount of coverage required to be seen valid
+    :return: DIC
+        a dictionary
+    '''
+    print("start evaluating blast results")
+
+    # read in blast results
+    # saves the blast results when they are valid and calculate the idnentity * coverage
+    files = os.listdir(blast_output)
+    blast_results = {}
+    for file in files:
+        file = os.path.join(blast_output, file)
+        with open(file) as f:
+            for line in f:
+                line = (line.split('\t'))
+
+                if line[0] not in blast_results.keys():
+                    blast_results[line[0]] = {}
+                if float(line[3]) >= identity_cutoff and float(line[4]) >= coverage_cutoff:
+                    blast_results[line[0]][line[1]] = [line[2], line[3], line[4], (float(line[3]) * float(line[4])),
+                                                       line[5]]
+
+    # filter per loci best blast results out
+    loci = blast_results.keys()
+
+    # todo write filterd blast results out incase users are having doubt or want a second choise
+    # todo the tmp dic should be imlproved becouse there is a tin change some results will have the same identity and coverage
+    # read in per locus
+    Filtered_blast_results = {}
+
+    for locus in loci:
+        TMP_dic = {}
+        hits = blast_results[locus].keys()
+        # for each hit make a smaller dictionary to ge best hit
+        # best hit is highest number coverage * idenitty
+        for hit in hits:
+            result = (blast_results[locus][hit])
+            TMP_dic[float(result[3])] = hit
+
+        # if empty no results good results have been found
+        if len(TMP_dic) != 0:
+            best_result = max(TMP_dic)
+            # convert dic to locus name and to gene name
+            Filtered_blast_results[locus] = (((blast_results[locus][TMP_dic[best_result]]))[4].rstrip())
+        else:
+            Filtered_blast_results[locus] = (locus.rsplit('.', 1))[0]
+
+    # there is a bug when a locus truly doesnt have any blast result it will be missed.
+    # this is not a problem for the schemes, but for the directory containing the fasta files
+
+    files_to_check = os.listdir(os.path.join(output_dir, 'wgMLST_scheme', 'locus_seq'))
+    for file in files_to_check:
+        if file not in Filtered_blast_results.keys():
+            Filtered_blast_results[file] = (file.split('.fasta'))[0]
+
+    return (Filtered_blast_results)
+def edit_files_loci_name(Filtered_blast_results, output_dir):
+    print('start editing loci names')
+    # retrieve some file names
+    Binary_file = os.path.join(output_dir, 'wgMLST_scheme', 'wgMLST_binary.tsv')
+    locus_seq_named = os.path.join(os.path.join(output_dir, 'wgMLST_scheme', 'locus_seq_named'))
+    locus_seq = os.path.join(os.path.join(output_dir, 'wgMLST_scheme', 'locus_seq'))
+
+    # change to dataframe
+    wg_MLST_scheme = pd.read_pickle(os.path.join(output_dir, 'wgMLST_scheme', 'wg_MLST.pck'))
+    wg_MLST_scheme_binary = pd.read_csv(Binary_file, sep='\t', index_col=0)
+
+    os.makedirs(locus_seq_named, exist_ok=True)
+    # todo change: multithread this
+
+    # loop to prevent overwriting files with the same annotation name
+    gene_names = ['']
+    with open(os.path.join(output_dir, 'wgMLST_scheme', 'locus_id_name_converstion'), 'w') as a:
+        for locus, gene_name in Filtered_blast_results.items():
+            # add this loop to prevent overwriting
+            count = 0
+            gene_name1 = ''
+            gene_name = gene_name.replace('/', '_').replace(" ", '_')
+            if gene_name in gene_names:
+                while gene_name1 in gene_names:
+                    count += 1
+                    gene_name1 = "{0}_({1})".format(gene_name, count)
+                gene_name = gene_name1
+
+            gene_names.append(gene_name)
+            # copy locus seq fasta under new name
+            try:
+                shutil.copy(os.path.join(locus_seq, locus), os.path.join(locus_seq_named, gene_name))
+            except:
+                shutil.copy(os.path.join(locus_seq, locus), os.path.join(locus_seq_named, locus))
+                print('seq named is to long to be written : {0}'.format(gene_name))
+
+            # edit binary file ##########################
+            locus = "Locus_ID_{0}".format(((locus.split('.'))[0].rsplit('_', 1))[1])
+            a.write("{0}\t{1}\n".format(locus, gene_name))
+
+            # edit whole mlst scheme
+            wg_MLST_scheme = wg_MLST_scheme.rename(index={locus: gene_name})
+
+            # edit the binary file
+            wg_MLST_scheme_binary = wg_MLST_scheme.rename(index={locus: gene_name})
+
+        # safe down files
+
+        # retrieve TSV to safe back as excel
+        # binary_wgMLST = pd.read_csv((os.path.join(output_dir,'wgMLST_scheme','wgMLST_binary_gene_names.tsv')),sep='\t')
+        # binary_wgMLST.to_excel(os.path.join(output_dir,'wgMLST_scheme','wgMLST_binary_gene_names.xlsx'))
+
+        wg_MLST_scheme_binary.to_csv((os.path.join(output_dir, 'wgMLST_scheme', 'wgMLST_binary_gene_names.tsv')),
+                                     sep='\t')
+        wg_MLST_scheme_binary.to_excel((os.path.join(output_dir, 'wgMLST_scheme', 'wgMLST_binary_gene_names.xlsx')))
+
+        wg_MLST_scheme.to_csv(os.path.join(output_dir, 'wgMLST_scheme', 'wg_MLST_gene_name.tsv'), sep='\t')
+        wg_MLST_scheme.to_excel(os.path.join(output_dir, 'wgMLST_scheme', 'wg_MLST_gene_name.xlsx'))
+
 ##################
 # Main functions #
 ##################
 
 
 def parse_arguments():
-
     '''
     Parse all arguments
     :return:
@@ -4904,7 +5387,6 @@ def parse_arguments():
 
     parser = argparse.ArgumentParser(description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
-
 
     ###########################
     # --add_loci method method#
@@ -4938,30 +5420,57 @@ def parse_arguments():
                         dest='recluster', default=False,
                         help='lofical argument wether reclustering should happen')
 
-
     #######################
-    # generate MLST SCHEME#
+    # Refine MLST seed    #
     #######################
 
-    # --gMLST
-    parser.add_argument('--gMLST', type=bool, required=False,
-                        dest='gMLST', default=False,
-                        help='logical argument wether MLST scheme should be created')
+    # --r_loci
+    parser.add_argument('--r_loci', type=bool, required=False,
+                        dest='r_loci', default=False,
+                        help='logical argument wheither can be skipped directory to refine loci')
 
     # --orphans
     parser.add_argument('--orphans', type=bool, required=False,
-                        dest='orphans', default=False,
+                        dest='orphans', default=True,
                         help='logical argument wether orphans are allowed'
-                        'orphans are genes who cant be assigned to a loci'
-                        'if True, they will be deleted from the scheme')
+                             'orphans are genes who cant be assigned to a loci'
+                             'if True, they will be deleted from the scheme')
+
+    # --d_loci
+
+    parser.add_argument('--d_loci', type=bool, required=False,
+                        dest='d_loci', default=True,
+                        help='logical argument whether loci should be checked on if they are truley distinct'
+                             'with BSRn score given (default = 0.8)')
+
+    #######################
+    # generate MLST_scheme#
+    #######################
+    parser.add_argument('--gMLST', type=bool, required=False,
+                        dest='gMLST', default=False,
+                        help='from already proccesed files and generated scheme seed is a wgMLST seed generated ')
+
+    ##################
+    # blast locus ID #
+    ##################
+    parser.add_argument('--NCBIn_path', type=str, required=False,
+                        dest='NCBIn_path', default='False',
+                        help='path to directory containing the local NCBI database for nucleotides')
+
+    parser.add_argument('--identity_cutoff', type=int, required=False,
+                        dest='identity_cutoff', default=80,
+                        help='cutoff on identity for blast results on local NCBI')
+
+    parser.add_argument('--coverage_cutoff', type=int, required=False,
+                        dest='coverage_cutoff', default=80,
+                        help='cutoff on coverage for blast results on local NCBI')
     #######################
     # Normal run required #
     #######################
 
-
     # -i input files path
     parser.add_argument('-i', type=str, required=False,
-                        dest='input_files', default= 'false',
+                        dest='input_files', default='false',
                         help='')
     # -o output path
     parser.add_argument('-o', type=str, required=True,
@@ -4969,10 +5478,9 @@ def parse_arguments():
                         help='outputh path but with --add_loci parameter als path used to find working Dir')
 
     # -s sample metadata path
-    parser.add_argument('-s', type=str, required=False, default= 'false',
+    parser.add_argument('-s', type=str, required=False, default='false',
                         dest='sample_metadata_input',
                         help='')
-
 
     ##########################
     # generate MLST functions#
@@ -4980,7 +5488,6 @@ def parse_arguments():
     parser.add_argument('--gSMD', type=bool, required=False,
                         default=False, dest='gSMD',
                         help='')
-
 
     parser.add_argument('--species', type=str, required=False,
                         default='None', dest='species',
@@ -5005,8 +5512,8 @@ def parse_arguments():
 
     # --p probabillity of augustus = 0.8
     parser.add_argument('--p', type=float, required=False,
-                        default=0.8, dest='prob',
-                        help='')
+                        default=0.0, dest='prob',
+                        help='minimum value of probabillity required of genes found by augustus (defulaut 0.0)')
 
     # --m min Minimal sequention length required = 201
     parser.add_argument('--m', type=int, required=False,
@@ -5028,12 +5535,10 @@ def parse_arguments():
                         default=0.2, dest='clustering_sim',
                         help='')
 
-
     # --Kmer_offset = 1
     parser.add_argument('--Kmer_offset', type=int, required=False,
                         default=1, dest='Kmer_offset',
                         help='')
-
 
     # --seq_num_cluster = 1
     parser.add_argument('--seq_num_cluster', type=int, required=False,
@@ -5042,7 +5547,7 @@ def parse_arguments():
 
     # --file_prefix = 'clustering'
     parser.add_argument('--file_prefix', type=str, required=False,
-                        default= 'clustering', dest='file_prefix',
+                        default='clustering', dest='file_prefix',
                         help='')
 
     # -- representative_filter = 0.9
@@ -5065,26 +5570,28 @@ def parse_arguments():
     parser.add_argument('--BSRn', type=float, required=False,
                         default=0.8, dest='BSRn',
                         help='BSR cutoff for blasting nucleotides')
+
+    parser.add_argument('--blast_path', type=str, required=False,
+                        default='', dest='blast_path',
+                        help='path to blast programs if not accesible by a single comand')
     args = parser.parse_args()
-
-
 
     #############################
     # edit input data of command#
     #############################
     if os.path.isdir(args.input_files[-1]):
-        #edit input files incase / is forgotten
+        # edit input files incase / is forgotten
         if (args.input_files[-1]) != '/':
-            args.input_files = args.input_files +'/'
-
+            args.input_files = args.input_files + '/'
 
     return [args.input_files, args.output_path, args.sample_metadata_input,
             args.bsr, args.threads, args.prob, args.min_seq_length, args.word_size
-            , args.window_size, args.clustering_sim,
+        , args.window_size, args.clustering_sim,
             args.Kmer_offset, args.seq_num_cluster, args.file_prefix,
             args.representative_filter, args.intra_filter, args.add_loci, args.force,
-            args.codon, args.add_gene, args.recluster, args.gMLST,args.orphans, args.reuse_augustus_path, args.BSRn
-            ,args.species,args.codon_nr, args.gSMD]
+            args.codon, args.add_gene, args.recluster, args.r_loci, args.orphans, args.reuse_augustus_path, args.BSRn
+        , args.species, args.codon_nr, args.gSMD, args.d_loci, args.gMLST,
+            args.NCBIn_path, args.identity_cutoff, args.coverage_cutoff,args.blast_path]
 
 def check_arguments(args):
     """ Checks the given parameters so far if it is in the right format.
@@ -5098,9 +5605,9 @@ def check_arguments(args):
     """
     input_data_files_sample_metadata = []
 
-    availeble_codon_table =[1,2,3,4,5,6,9,10,11,12,13,14,16,21,22,23,24,25,26,27,28,29,30,30,31,33]
-    accepted_formats =['fna','fasta','fa']
-
+    availeble_codon_table = [1, 2, 3, 4, 5, 6, 9, 10, 11, 12, 13, 14, 16, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 30,
+                             31, 33]
+    accepted_formats = ['fna', 'fasta', 'fa']
 
     #######################
     # Checking  requirements#
@@ -5109,7 +5616,8 @@ def check_arguments(args):
     if args[25]:
 
         if args[25] not in availeble_codon_table:
-            print("codon table nr {0} is not in available tables please check input or notify the developers".format(args[25]))
+            print("codon table nr {0} is not in available tables please check input or notify the developers".format(
+                args[25]))
             exit()
 
     #############################
@@ -5118,90 +5626,89 @@ def check_arguments(args):
     elif args[15] != 'false':
 
         if not (os.path.isfile(args[15])):
-                print('add_loci path doesnt lead to a file')
-                print('current add_loci path is "{0}" '.format(args[15]))
+            print('add_loci path doesnt lead to a file')
+            print('current add_loci path is "{0}" '.format(args[15]))
+            exit()
+
+        # this check only should happen when force is False
+        if not args[16]:
+            # check weither a codon number is given
+            if args[17] == 0:
+                print('add a codon number with --codon')
+                exit()
+            # check wether codon table number is in list of available numbers
+            elif args[17] not in availeble_codon_table:
+                print('given codon table number {0} is not in current list of available codon table numbers\n'
+                      'please choose a different number'.format(args[17]))
                 exit()
 
-            # this check only should happen when force is False
-        if not args[16]:
-                # check weither a codon number is given
-                if args[17] == 0:
-                    print('add a codon number with --codon')
-                    exit()
-                # check wether codon table number is in list of available numbers
-                elif args[17] not in availeble_codon_table:
-                    print('given codon table number {0} is not in current list of available codon table numbers\n'
-                          'please choose a different number'.format(args[17]))
-                    exit()
-
-        #check wether working directory existis
+        # check wether working directory existis
 
         if not os.path.isdir(args[1]):
-            print('path {0} does not exists, run normal euTyper first or correct path to already an existing working dir'.format(args[1]))
+            print(
+                'path {0} does not exists, run normal euTyper first or correct path to already an existing working dir'.format(
+                    args[1]))
             exit()
     ###########################
     # check the add_gene modus#
     ###########################
 
     elif args[18] != 'false':
-        #check wether output path exists
-        if  os.path.isdir(args[18]):
+        # check wether output path exists
+        if os.path.isdir(args[18]):
             files_in_input = os.listdir(args[18])
         else:
             print("{0} is not a path to directory \nit is required to give a path to a directory containing fasta"
                   "files of genomes to be processed by Augustus".format(args[18]))
             exit()
 
-
-        #check sample meta data
+        # check sample meta data
         if args[2] != 'false':
 
-                with open(args[2]) as f:
+            with open(args[2]) as f:
 
-                    for line in f:
-                        name = (line.strip().split('\t'))[0]
-                        if len(name) >= 40:
-                            print('file {0} name is to large, reduce file name to a maximum of 40 characters'.format(name))
-                            exit()
+                for line in f:
+                    name = (line.strip().split('\t'))[0]
+                    if len(name) >= 40:
+                        print('file {0} name is to large, reduce file name to a maximum of 40 characters'.format(name))
+                        exit()
 
-                        if (name.rsplit('.',1))[1] not in accepted_formats:
-                            print("{0} is not in the correct format, the correct formats are fasta and fna")
-                            exit()
+                    if (name.rsplit('.', 1))[1] not in accepted_formats:
+                        print("{0} is not in the correct format, the correct formats are fasta and fna")
+                        exit()
 
-                    for line in f:
-                        line = line.strip().split('\t')
+                for line in f:
+                    line = line.strip().split('\t')
 
-                        # checks if there are 3 columns
-                        if len(line) != 3:
-                            print("sample meta data doesnt contain 3 column ( tab delimated) ")
-                            exit()
+                    # checks if there are 3 columns
+                    if len(line) != 3:
+                        print("sample meta data doesnt contain 3 column ( tab delimated) ")
+                        exit()
 
-                        # test weither samplemetada codon table number contains int
-                        try:
-                            codon_table_nr = int(line[2])
-                            if codon_table_nr not in availeble_codon_table:
-                                print( ' codon table nr ' + (line[2]) + ' is not available ')
-                                print (' exiting euTyper')
-                                exit()
-                        except:
-                            print(' codon table doesnt all contain numbers')
-                            print (' input ' + (line[2]) + ' is not a valid choise')
+                    # test weither samplemetada codon table number contains int
+                    try:
+                        codon_table_nr = int(line[2])
+                        if codon_table_nr not in availeble_codon_table:
+                            print(' codon table nr ' + (line[2]) + ' is not available ')
                             print(' exiting euTyper')
                             exit()
+                    except:
+                        print(' codon table doesnt all contain numbers')
+                        print(' input ' + (line[2]) + ' is not a valid choise')
+                        print(' exiting euTyper')
+                        exit()
 
+                    # checks weither the input data names are correct in sample metadata
+                    input_data_files_sample_metadata.append(line[0])
 
-
-                        # checks weither the input data names are correct in sample metadata
-                        input_data_files_sample_metadata.append(line[0])
-
-                    for element in input_data_files_sample_metadata:
-                        if element not in files_in_input:
-                            print( (element) + ' is in sample metadata is not found in input data')
-                            print(' exiting euTyper')
-                            exit()
-           # except:
-           #     print('sample metadata file (path) {0} could not be openend please check path'.format(args[2]))
-           #     exit()
+                for element in input_data_files_sample_metadata:
+                    if element not in files_in_input:
+                        print((element) + ' is in sample metadata is not found in input data')
+                        print(' exiting euTyper')
+                        exit()
+        # except:
+        #     print('sample metadata file (path) {0} could not be openend please check path'.format(args[2]))
+        #     exit()
         else:
             print('-s parameter is empty , fill in path to sample_metadata \n'
                   'sample metadata is a TSV file containing samplenames species(augustus) and codon table number')
@@ -5210,7 +5717,9 @@ def check_arguments(args):
         # check output path
 
         if not os.path.isdir(args[1]):
-            print(' -o path {0} does not exists, run normal euTyper first or correct path to already an existing working dir'.format(args[1]))
+            print(
+                ' -o path {0} does not exists, run normal euTyper first or correct path to already an existing working dir'.format(
+                    args[1]))
             exit()
 
 
@@ -5222,7 +5731,9 @@ def check_arguments(args):
         # check output path
 
         if not os.path.isdir(args[1]):
-            print(' -o path {0} does not exists, run normal euTyper first or correct path to already an existing working dir'.format(args[1]))
+            print(
+                ' -o path {0} does not exists, run normal euTyper first or correct path to already an existing working dir'.format(
+                    args[1]))
             exit()
 
     #######################
@@ -5231,7 +5742,9 @@ def check_arguments(args):
     elif args[20]:
 
         if not os.path.isdir(args[1]):
-            print(' -o path {0} does not exists, run normal euTyper first or correct path to already an existing working dir'.format(args[1]))
+            print(
+                ' -o path {0} does not exists, run normal euTyper first or correct path to already an existing working dir'.format(
+                    args[1]))
             exit()
 
     #########################
@@ -5240,8 +5753,8 @@ def check_arguments(args):
 
     elif args[22] != 'false':
 
-        if  os.path.isdir(args[22]):
-            path1 = os.path.join(args[22],'temp','2_augustus_output')
+        if os.path.isdir(args[22]):
+            path1 = os.path.join(args[22], 'temp', '2_augustus_output')
             if not os.path.isdir(path1):
                 print('augustus results directory does not exist, run euTyper normal first')
                 exit()
@@ -5253,7 +5766,6 @@ def check_arguments(args):
     ############################
     # check normal intended run#
     ############################
-
 
     else:
 
@@ -5276,7 +5788,8 @@ def check_arguments(args):
                     for line in f:
                         name = (line.strip().split('\t'))[0]
                         if len(name) >= 40:
-                            print('file {0} name is to large, reduce file name to a maximum of 40 characters'.format(name))
+                            print('file {0} name is to large, reduce file name to a maximum of 40 characters'.format(
+                                name))
                             exit()
                     for line in f:
                         line = line.strip().split('\t')
@@ -5315,13 +5828,14 @@ def check_arguments(args):
             print('-s parameter is empty , fill in path to sample_metadata \n'
                   'sample metadata is a TSV file containing samplenames species(augustus) and codon table number')
             exit()
-        #check of probabillity cutoff.
+        # check of probabillity cutoff.
         try:
             if float(args[5]) > 1.0 or float(args[5]) < 0.0:
                 print('probabillity cutoff is outside range 0.0 - 1.0 \n input {0} was not accepted'.format(args[5]))
                 exit()
         except:
-            print('probabillity cutoff could not be converted to an float \n input {0} was not accepted'.format(str(args[5])))
+            print('probabillity cutoff could not be converted to an float \n input {0} was not accepted'.format(
+                str(args[5])))
             exit()
 
         # checks wether output directory already existis
@@ -5329,8 +5843,7 @@ def check_arguments(args):
             print('path {0} does already exists, to prevent overwriting please select a new output folder \n'
                   'euTyper will create the new folder'.format(args[1]))
 
-
-        #checks if the output folder is linked to a file. if not existign or to an other directory that is okay
+        # checks if the output folder is linked to a file. if not existign or to an other directory that is okay
         if os.path.isfile(args[1]):
             print(' output directory path is linked to a file, please change : ' + (args[1]))
             exit()
@@ -5340,59 +5853,91 @@ def check_arguments(args):
             print(' to prevent overwriting other files')
             exit()
 
-def pre_processing(sample_information, output_path, threads, prob, pt_to_input_folder,re_use_augustus_path):
-        """ The preprocessing runs Augustus to gain the CDS location of the gnomes and assemblies
-            From the CDS the AA will be calculated by the given codon table
+def pre_processing(sample_information, output_path, threads, prob, pt_to_input_folder, re_use_augustus_path):
+    '''
+    The preprossesing runs augustus to gain the CDS location of the genome assemblies
+    From the CDS the AA will be calculated
+    - Augustus run parralel by splitting on contig
+    - process augustus
+    - merge results back
+    - write files to CDS_AA storage directory
 
-            Parameters
-            ----------
-            - path to sample meta data
-            - output path
-            - sample name
-            - species parameter
-            - codon table number
-            Returns:
-            - Augustus file
-            - CDS sequences
-            - AA sequences
-        """
+    :param sample_information: dic
+        dictionary containing the sample name and codon table of the samples
 
-        print('\n Running AUGUSTUS on ' + str(len(sample_information)) + ' sub samples')
+    :param output_path: str
+        path to working dirtory of augustus
+    :param threads: int
+        amount of CPU euTyper is allowed to use
+    :param prob: float
+        cutoff value of found genes by the internal statistics of augustus
+    :param pt_to_input_folder: str
+        path to the input folder containing the assemblies of the genomes
+    :param re_use_augustus_path: str  (optional)
+        path to other working directory where augustus has allready processed files.
+    :return:
+        str, path to fasta files.
+    '''
+    print('\n Running AUGUSTUS on ' + str(len(sample_information)) + ' sub samples')
 
-        #the reuse augustus parameter skips the processing of augustus by coping it from an already processed directory
-        if re_use_augustus_path == 'false':
-            temp_dir_2, temp_dir = execute_augustus(sample_information, threads, output_path, pt_to_input_folder)
+    # the reuse augustus parameter skips the processing of augustus by coping it from an already processed directory
+    if re_use_augustus_path == 'false':
+        temp_dir_2, temp_dir = execute_augustus(sample_information, threads, output_path, pt_to_input_folder)
+    else:
+        temp_dir_2, temp_dir = copy_previous_augustus_results(re_use_augustus_path, output_path, threads)
 
-        else:
-            temp_dir_2, temp_dir = copy_previous_augustus_results(re_use_augustus_path,output_path,threads)
+    # retrieve the CDS location and merging the parralel augustus output
+    tmp_output = retrieve_CDS_AA_from_augustus_parrallel(temp_dir_2, sample_information, temp_dir, output_path, prob,
+                                                         threads)
 
-        # retrieve the CDS location and merging the parralel augustus output
-        tmp_output = retrieve_CDS_AA_from_augustus(temp_dir_2, sample_information, temp_dir, output_path, prob)
+    # combining created files
+    fasta_location = combine_fastas_parralel(tmp_output, sample_information, output_path, threads)
 
-        # combining created files
-        fasta_location = combine_fastas(tmp_output, sample_information, output_path)
-
-        #to support all available file extenstions, current files needs to be changed to .fna
-        #could be solved by making code universal but this is faster sorry and less of a fuss :(
-        edit_files(tmp_output, sample_information, output_path)
-        return (fasta_location)
+    # to support all available file extenstions, current files needs to be changed to .fna
+    # could be solved by making code universal but this is faster
+    edit_files(tmp_output, sample_information, output_path)
+    return (fasta_location)
 
 def seed_creation(output_directory, MinSeqlen, word_size, window_size, clustering_sim,
-                      cpu_cores, kmer_offset, seq_num_cluster, representative_filter, intra_filter, BSR, schema_name):
+                  cpu_cores, kmer_offset, seq_num_cluster, representative_filter, intra_filter, BSR, schema_name, blast_dir):
     '''
-    Gereral flow to create the Scheme seed of all the genes and AA found in the CDS_AA folder
-    :param output_directory:
-    :param MinSeqlen:
-    :param word_size:
-    :param window_size:
-    :param clustering_sim:
-    :param cpu_cores:
-    :param kmer_offset:
-    :param seq_num_cluster:
-    :param representative_filter:
-    :param intra_filter:
-    :param BSR:
-    :param schema_name:
+    Create the scheme seed (set of loci reference sequences):
+    - remove seq smaller then
+    - remove duplications
+    - order sequences
+    - group in to 40 groups
+    - cluster groups based on minimizers
+    - remove similar sequences  in a cluster based on Kmers
+    - merge clusters based on Kmers
+    - remove similar sequences in a cluster based blastP
+    - check similarity between all clusters based on blastP
+    - write down reference sequences of a cluster
+    :param output_directory: str
+        path to the working directory
+    :param MinSeqlen: int
+        minimal sequence length to be not filterd out
+    :param word_size:  int
+        value K for the kmer size
+    :param window_size: int
+        value of the window size/number of consecutive k-mers per window
+    :param clustering_sim: float
+        similarity treshold to add a sequence to a cluster
+    :param cpu_cores: int
+        amount of CPU euTYper is allowed to used
+    :param kmer_offset: int
+        value to indicate offset of consecutive kmers
+    :param seq_num_cluster: int
+        maximum number of clusters that the sequence can be added to
+    :param representative_filter: float
+        similarity treshold value, sequence with equal or greater similarity with the cluster
+        representatives are excluded from the cluster
+    :param intra_filter: float
+        similarity treshold value, sequence with equal or greater similarity with the cluster
+        representatives are excluded from the cluster
+    :param BSR: float
+        Blast score ratio treshold
+    :param schema_name: str
+        name of the scheme
     :return:
     '''
     #################################################
@@ -5401,36 +5946,12 @@ def seed_creation(output_directory, MinSeqlen, word_size, window_size, clusterin
     #################################################
 
     # define directory for temporary files
-    temp_directory = join_paths(output_directory, ['temp'])
+    temp_directory = os.path.join(output_directory, 'temp')
     os.makedirs(temp_directory, exist_ok=True)
     # create scheme seed
-    files = []
-
-    for file in os.listdir(os.path.join(output_directory,'CDS_AA')):
-        if "_CDS" in file:
-            files.append((file.split('_CDS'))[0])
-        elif '_protein' in file:
-            files.append((file.split('_protein'))[0])
-
-    #remove duplication
-    files = list(set(files))
-    # find protein and CDA file of samples and couple to dictionary#
-    paths = {}
-    # retrieve file names of the protein output path
-    path = os.path.join(output_directory, 'CDS_AA')
-    files1 = sorted(os.listdir(path))
-
-    for file in files:
-        TMP_path = []
-        for file1 in files1:
-            if file in file1:
-                TMP_path.append(os.path.join(path, file1))
-        if len(TMP_path) == 2:
-            paths[file] = TMP_path
 
     # generate dictionary with the CDS coupled to their AA
-    CDS_AA = retrieve_CDS_AA(paths)
-
+    CDS_AA = retrieve_CDS_AA(output_directory)
     print(('\nRemoving smaller then ' + str(MinSeqlen) + ' nucleotides '), end='')
     CDS_AA = remove_small(CDS_AA, MinSeqlen)
 
@@ -5438,24 +5959,15 @@ def seed_creation(output_directory, MinSeqlen, word_size, window_size, clusterin
     print('\nRemoving duplicated sequences...', end='')
     CDS_AA = remove_duplicates(CDS_AA, 2)
 
-
     #####################################
     # clustering found protein sequences#
     #####################################
 
     # create directory to store clustering data
-    clustering_dir = join_paths(temp_directory, ['4_clustering'])
+    clustering_dir = os.path.join(temp_directory, '4_clustering')
     os.makedirs(clustering_dir, exist_ok=True)
 
-    AA = {}
-    # create dictionary with only AA
-    for k, v in CDS_AA.items():
-        AA[k] = v[1]
-
-    CDS = {}
-    for k, v in CDS_AA.items():
-        CDS[k] = v[0]
-
+    AA,CDS = Retrieve_AA_seq_CDS_seq(CDS_AA)
     print(('amount of sequences at prior clustering ') + str(len(AA)))
 
     # first clustering step
@@ -5465,18 +5977,15 @@ def seed_creation(output_directory, MinSeqlen, word_size, window_size, clusterin
                                    'clusters', True, False)
 
     # Refining the clusters
-    cp_results = cluster_representative_filter(cs_results,
+    clusters, excluded_seqids = cluster_representative_filter(cs_results,
                                                representative_filter,
                                                clustering_dir,
                                                'repfilter')
-
-    clusters, excluded_seqids = cp_results
 
     # remove excluded seqids
     schema_seqids = list(set(AA) - excluded_seqids)
 
     print(('ID after excluding ' + str(len(schema_seqids))))
-
     # intra cluster pruner step
     cip_results = cluster_intra_filter(clusters, AA,
                                        word_size, intra_filter,
@@ -5492,19 +6001,12 @@ def seed_creation(output_directory, MinSeqlen, word_size, window_size, clusterin
     print(('ID after intra filter ' + str(len(schema_seqids))))
     print((('amount of cluster sequences ') + str(len(clusters))))
 
-    #########################
-    # Blast P found clusters#
-    #########################
+    #initialise blast settings
+    blastn_path, blastp_path, makeblastdb_path = initialise_blast_alias_path(blast_dir)
 
-    BLASTP_ALIAS = 'blastp.exe' if platform.system() == 'Windows' else 'blastp'
-    MAKEBLASTDB_ALIAS = 'makeblastdb.exe' if platform.system() == 'Windows' else 'makeblastdb'
-    blast_path = ''
-
-    blastp_path = os.path.join(blast_path, BLASTP_ALIAS)
-    makeblastdb_path = os.path.join(blast_path, MAKEBLASTDB_ALIAS)
-
+    #start clustering
     if len(clusters) > 0:
-        blasting_dir = join_paths(clustering_dir, ['cluster_blaster'])
+        blasting_dir = os.path.join(clustering_dir, 'cluster_blaster')
         create_directory(blasting_dir)
 
         blast_results, ids_dict = blast_clusters(clusters, AA,
@@ -5516,8 +6018,6 @@ def seed_creation(output_directory, MinSeqlen, word_size, window_size, clusterin
         ########################
         # combine all DNA fasta#
         ########################
-
-
 
         # compute and exclude based on BSR
         blast_excluded_alleles = [apply_bsr(read_tabular(file),
@@ -5585,160 +6085,110 @@ def seed_creation(output_directory, MinSeqlen, word_size, window_size, clusterin
         schema_files = create_schema_structure(output_schema, output_directory,
                                                final_blast_dir, schema_name)
 
-
-        def edit_cluster_dir(output_directory,schema_name):
-
-            path4 = os.path.join(output_directory,schema_name)
-            path5 = os.path.join(path4,'short')
-
-            paths = [path4,path5]
-            for path in paths:
-                files = os.listdir(path)
-                for file in files:
-                    try:
-                        file1 = file.replace('-','_')
-                        pathA = os.path.join(path,file)
-                        pathB = os.path.join(path,file1)
-                        with open(pathA) as n:
-                            with open(pathB,'w') as f:
-                                for line in n:
-                                    f.write(line.replace('-','_'))
-                        os.remove(pathA)
-                    except:
-                        print('')
         edit_cluster_dir(output_directory, schema_name)
 
         return [schema_files, temp_directory]
 
-def create_schema_structure(schema_seed_fasta, output_directory,
-                            temp_directory, schema_name):
-    """ Creates the schema seed directory with one FASTA file per
-        distinct locus and the `short` directory with the FASTA files
-        used to save the representative sequences.
-        Parameters
-        ----------
-        schema_seed_fasta : str
-            Path to the FASTA file that contains the sequences that
-            constitute the schema seed. Each FASTA record in the file
-            is a representative sequence chosen for a locus.
-        output_directory : str
-            Path to the main output directory of the process.
-        temp_directory : str
-            Path to the directory where the FASTA file with the
-            records for the schema seed will be saved to.
-        schema_name : str
-            Name for the schema's directory.
-        Returns
-        -------
-        schema_files : list
-            List with the paths to the FASTA files in the schema seed.
-    """
-    CHAR_REPLACEMENTS = [("|", "_"), ("_", "-"), ("(", ""),
-                         (")", ""), ("'", ""), ("\"", ""), (":", "")]
-    # add allele identifier to all sequences
-    schema_records = ['>{0}\n{1}'.format(replace_multiple_characters(rec.id, CHAR_REPLACEMENTS) + '_1', str(rec.seq))
-                      for rec in SeqIO.parse(schema_seed_fasta, 'fasta')]
+def refine_MLST_seed(output_path, orphans, cpu_cores, BSRn, blast_dir,distinct_loci=True):
+    '''
+    in the refine MLST seed the set of loci will be refined by:
+    - testing if all loci are distinct by BSR (on nucleotides level)
+    - finding orphans and reclustering them to find additinal set of loci
+    - the current set of loci will be uppdated
 
-    final_records = os.path.join(temp_directory, 'schema_seed_final.fasta')
-    write_lines(schema_records, final_records)
+    :param output_path: str
+        path to working directory
+    :param orphans: bool
+        True or false if the algorithm needs to find orphans (default = True)
+    :param cpu_cores: int
+        amount of CPU euTyper is allowed to use
+    :param BSRn: float
+        Blast score ratio for nucleotides (default = 0.8)
+    :param distinct_loci: bool
+        True or false if the algorithm needs to check on distinct loci (default = True)
 
-    schema_dir = join_paths(output_directory, [schema_name])
-    create_directory(schema_dir)
-
-    # create directory and schema files
-    filenames = (record.id[:-2] for record in SeqIO.parse(final_records, 'fasta'))
-    schema_files = split_fasta(final_records, schema_dir, 1, filenames)
-    create_short(schema_files, schema_dir)
-
-
-    return schema_files
-
-def generate_mlst(output_path, orphans, cpu_cores, BSRn, distinct_loci = True):
-
-    print('start producing MLST scheme from current set of loci and genes in work directory')
+    :return:
+        NA
+    '''
+    print('start refining scheem seed from current set of loci and genes in work directory')
     ####################
     # initialise items #
     ####################
+    temp_directory = os.path.join(output_path, 'temp')
 
-    temp_directory = os.path.join(output_path,'temp')
-    BLASTN_ALIAS = 'blastn.exe' if platform.system() == 'Windows' else 'blastn'
-    MAKEBLASTDB_ALIAS = 'makeblastdb.exe' if platform.system() == 'Windows' else 'makeblastdb'
-    blast_path = ''
-    blastn_path = os.path.join(blast_path, BLASTN_ALIAS)
-    makeblastdb_path = os.path.join(blast_path, MAKEBLASTDB_ALIAS)
-
-
+    #initialise blast parameters
+    blastn_path, blastp_path, makeblastdb_path = initialise_blast_alias_path(blast_dir)
     ########################
     # first BlastN#
     # loci vs all genes ###
     #######################
     # create directory for first blast
-    Tmp_dir_blast = join_paths(temp_directory, ['6_scheme_blastN'])
-    #prepare items for loci vs all genes blast
-    #Tmp_dir-blast = path sub temporary folder where everything is stored
-    #'clustering is the name where all loci's currently are stored
-    #outputpath = the general storage place
-    #blast db is the patht ho the blasting algorithm
+    Tmp_dir_blast = os.path.join(temp_directory, '6_scheme_blastN')
 
-    blast_results_dir, blast_db, sequentions, fasta_path = prepare_loci_vs_allBlastN(Tmp_dir_blast,'clustering', output_path, makeblastdb_path)
+    #set blast settings
+    blast_results_dir, blast_db, sequentions, fasta_path = prepare_loci_vs_allBlastN(Tmp_dir_blast, 'clustering',
+                                                                                     output_path, makeblastdb_path)
     print('BLASTing CDS sequences against loci...... ', end='')
     blast_output = '{0}/{1}_blast_out.tsv'.format(blast_results_dir,
-                                                'pre_schema_seed')
+                                                  'pre_schema_seed')
     # add this as debugging
     blast_results_dir = blast_output
     blast_stderr = run_blastn(blastn_path, blast_db, fasta_path,
-                                 blast_results_dir, 1, cpu_cores)
-    print(' done')
+                              blast_results_dir, 1, cpu_cores)
+    print('done')
 
     if len(blast_stderr) > 0:
-            sys.exit(blast_stderr)
+        sys.exit(blast_stderr)
 
     # if orhpans are not allowed will recheck the clustering files if there are any empty results.
     # if so it will define a new set of loci by blastN set of Loci and new set
-    if  distinct_loci:
+    if distinct_loci:
         to_remove = distinct_loci_check(blast_results_dir, BSRn)
-        remove_loci(to_remove, (os.path.join(output_path,'clustering')))
+        print('in total of {0} sequences where found which were too similar'.format(len(to_remove)))
+        remove_loci(to_remove, (os.path.join(output_path, 'clustering')))
 
-
-    if not orphans:
+    if orphans:
 
         ###################
         # retrieve orphans#
         ###################
 
-        #retrieve orphans names if they are there.
-        #genes are orhans when they have no Blast hit.
+        # retrieve orphans names if they are there.
+        # genes are orhans when they have no Blast hit.
         # or when possible BSR hits are below BSRn value
         print('start finding orphans in blast results')
+        # todo multithread this
         orphans_names = retrieve_orpahns(blast_results_dir, BSRn, sequentions, fasta_path)
         recluster = 6
-        #if orphans list is not empty it will continue
+        # if orphans list is not empty it will continue
         # while loop currently becouse the blastN parralel is buggy
-        #decided to not put parralel for the loading bar it seems to resolfe the bugs and there are no orphans more
-        while  orphans_names:
+        # decided to not put parralel for the loading bar it seems to resolfe the bugs and there are no orphans more
+        while orphans_names:
             recluster += 1
-            print('found {0} orphans who doesnt contain any blast result \nwill start blasting the orphans'.format(len(orphans_names)))
+            print('found {0} orphans who doesnt contain any blast result \nwill start blasting the orphans'.format(
+                len(orphans_names)))
 
             ##################################
             # Cluster the orphans into loci's#
             ##################################
-            #create pathlooking for orphans
+            # create pathlooking for orphans
 
-            allvsall_path = join_paths(temp_directory, [(str(recluster))+'_reclustering'])
-            #initiate blast enviorment in the allvsall dir with only the orphans
-            #from earlier selectes genes are only the orhpans selected and the fasta_files sub dir created
-            #from the fasta_files sub dir is the initialise fasta file created where the database of will constructed
-            #this allowes that only orphans will be blasted against each other
-            blast_results_dir, sequentions, blast_db, fasta_files_path, fasta_path = prepare_allVsall_blastN_with_genes_of_interest(allvsall_path, sequentions, makeblastdb_path, orphans_names ,fasta_path)
+            allvsall_path = join_paths(temp_directory, [(str(recluster)) + '_reclustering'])
+            # initiate blast enviorment in the allvsall dir with only the orphans
+            # from earlier selectes genes are only the orhpans selected and the fasta_files sub dir created
+            # from the fasta_files sub dir is the initialise fasta file created where the database of will constructed
+            # this allowes that only orphans will be blasted against each other
+            blast_results_dir, sequentions, blast_db, fasta_files_path, fasta_path = prepare_allVsall_blastN_with_genes_of_interest(
+                allvsall_path, sequentions, makeblastdb_path, orphans_names, fasta_path)
 
             print('BLASTing orphans sequences against orphans...... \n')
-            blast_output = '{0}/{1}_blast_out.tsv'.format(blast_results_dir,'pre_schema_seed')
+            blast_output = '{0}/{1}_blast_out.tsv'.format(blast_results_dir, 'pre_schema_seed')
             # add this as debugging
             blast_results_dir = blast_output
             blast_stderr = run_blastn(blastn_path, blast_db, fasta_path,
-                                         blast_output, 1, cpu_cores)
+                                      blast_output, 1, cpu_cores)
             if len(blast_stderr) > 0:
-                    sys.exit(blast_stderr)
+                sys.exit(blast_stderr)
 
             print(' done')
             # by BSR filtering are the blasting result evaluated and pre grouped
@@ -5748,8 +6198,8 @@ def generate_mlst(output_path, orphans, cpu_cores, BSRn, distinct_loci = True):
             # the BSR groups are filted
 
             new_clusters = Cluster_BSR_groups(loci, self_scores)
-            #create a new scheme seed which is Cluster dir + orphans
-            new_scheme_seed_path = update_scheme_seed(new_clusters, output_path,fasta_files_path)
+            # create a new scheme seed which is Cluster dir + orphans
+            new_scheme_seed_path = update_scheme_seed(new_clusters, output_path, fasta_files_path)
 
             ###########################
             # blast again, Loci vs All#
@@ -5757,63 +6207,74 @@ def generate_mlst(output_path, orphans, cpu_cores, BSRn, distinct_loci = True):
 
             recluster += 1
             # create directory for first blast
-            Tmp_dir_blast = join_paths(temp_directory, [(str(recluster))+'_updated_clustering'])
+            Tmp_dir_blast = join_paths(temp_directory, [(str(recluster)) + '_updated_clustering'])
             print('start prepraring loci vs CDS blast')
-            blast_results_dir, blast_db, sequentions, fasta_path = prepare_loci_vs_allBlastN(Tmp_dir_blast, 'updated_clustering',
-                                                                                 output_path, makeblastdb_path)
+            blast_results_dir, blast_db, sequentions, fasta_path = prepare_loci_vs_allBlastN(Tmp_dir_blast,
+                                                                                             'updated_clustering',
+                                                                                             output_path,
+                                                                                             makeblastdb_path)
             print('BLASTing CDS sequences against loci...... ', end='')
             blast_output = '{0}/{1}_blast_out.tsv'.format(blast_results_dir,
-                                                              'pre_schema_seed')
-             # add this as debugging
+                                                          'pre_schema_seed')
+            # add this as debugging
             blast_results_dir = blast_output
             blast_stderr = run_blastn(blastn_path, blast_db, fasta_path,
-                                         blast_output, 1, cpu_cores)
+                                      blast_output, 1, cpu_cores)
 
             if len(blast_stderr) > 0:
-                    sys.exit(blast_stderr)
+                sys.exit(blast_stderr)
 
             ###################################
             # check if there are still orphans#
             ###################################
             orphans_names = retrieve_orpahns(blast_results_dir, BSRn, sequentions, fasta_path)
             if orphans_names:
-                new_scheme_seed_path = update_scheme_seed(new_clusters, output_path,fasta_files_path)
-    
-    
+                new_scheme_seed_path = update_scheme_seed(new_clusters, output_path, fasta_files_path)
 
     ##########################
     # start generating scheme#
     ##########################
 
+def generate_MLST_scheme(output_path, BSRn, ):
+    blast_result_dir = os.path.join(output_path, 'temp')
+    # find newest directory = newest scheme seed.
+    blast_results_dir = os.path.join(max(glob.glob(os.path.join(blast_result_dir, '*/')), key=os.path.getmtime),
+                                     'results_1', 'pre_schema_seed_blast_out.tsv')
+
     self_scores = retrieve_self_scores(blast_results_dir)
-    CDS = retrieve_all_DNA(os.path.join(output_path,'CDS_AA'))
+    CDS = retrieve_all_DNA(os.path.join(output_path, 'CDS_AA'))
     ID_seq = retrieve_allele_ID(CDS)
 
+    # create raw loci scheme
     genome_statistics, loci_scheme = Create_MLST_scheme(self_scores, CDS, ID_seq, blast_results_dir, BSRn, output_path)
 
-    MLST_scheme,statistics , wg_mlst_path ,locus_dir = edit_scheme(genome_statistics, loci_scheme, ID_seq, CDS, output_path, order=True)
+    # normalize scheme and update statistics
+    MLST_scheme, statistics, wg_mlst_path, locus_dir = edit_scheme(genome_statistics, loci_scheme, ID_seq, CDS,
+                                                                   output_path, order=True)
 
-    blast_locus = None
-    custom_blast_locus_db = None
-    print(wg_mlst_path)
+    # order scheme
     MLST_scheme, statistics = statistics_ordering_mlst_scheme(MLST_scheme, genome_statistics, order=True)
 
-    #if blast_locus:
-        #Blast_loci(wg_mlst_path, MLST_scheme, locus_dir)
-
+    # generate sum_ANF
     sum_anf_stats(MLST_scheme, wg_mlst_path)
-    safe_scheme_statistics(MLST_scheme,statistics , wg_mlst_path)
+    # safe scheme and statistics
+    safe_scheme_statistics(MLST_scheme, statistics, wg_mlst_path)
 
+    return (len(MLST_scheme))
 
+def Blast_loci_of_schemes(output_dir, NCBIn_path, cpu_cores, identity_cutoff, coverage_cutoff):
+    Blast_loci(output_dir, cpu_cores, NCBIn_path)
+    loci_blast_result = os.path.join(output_dir, 'wgMLST_scheme', 'blast_output')
+    Filtered_blast_results = evaluate_blast_results(loci_blast_result, identity_cutoff, coverage_cutoff, output_dir)
+    edit_files_loci_name(Filtered_blast_results, output_dir)
 
 
 def main(args):
-
     ###########################################################
     # giving arguments different variables to increase clarity#
     ###########################################################
 
-    #sample_information, output_path,threads, prob ,path_to_input_folder
+    # sample_information, output_path,threads, prob ,path_to_input_folder
     path_to_input_folder = args[0]
     output_path = args[1]
     sample_metadata_path = args[2]
@@ -5834,27 +6295,33 @@ def main(args):
     codon = args[17]
     add_gene_path = args[18]
     recluster = args[19]
-    gMLST = args[20]
+    r_loci = args[20]
     orphans = args[21]
     re_use_augustus_path = args[22]
     BSRn = args[23]
     species = args[24]
     codon_nr = args[25]
     gMSD = args[26]
+    d_loci = args[27]
+    gMLST = args[28]
+    NCBIn_path = args[29]
+    identity_cutoff = args[30]
+    coverage_cutoff = args[31]
+    blast_dir = args[32]
     ###########
     # add_loci#
     ###########
 
     if gMSD:
-        #generate sample meta data for lazy people like me
-        generate_sample_metadata(output_path,path_to_input_folder, species, codon_nr)
+        # generate sample meta data for lazy people like me
+        generate_sample_metadata(output_path, path_to_input_folder, species, codon_nr)
 
     elif add_loci_path != 'false':
 
         start_date = dt.datetime.now()
         start_date_str = dt.datetime.strftime(start_date, '%Y-%m-%dT%H:%M:%S')
         print('\nStarted at: {0}\n'.format(start_date_str))
-        output_path1 = os.path.join(output_path,'clustering')
+        output_path1 = os.path.join(output_path, 'clustering')
         print('started adding genes from {0} to scheme seed in working dir {1}'.format(add_loci_path, output_path1))
         add_loci_to_seed(add_loci_path, output_path, force, codon)
 
@@ -5869,14 +6336,13 @@ def main(args):
                 results = seed_creation(output_path, min_seq_length, word_size, window_size,
                                         clustering_sim,
                                         threads, kmer_offset, seq_num_cluster, representative_filter, intra_filter,
-                                        BSR_cutoff, file_prefix)
+                                        BSR_cutoff, file_prefix,blast_dir)
 
 
     ############
     # add genes#
     ############
     elif add_gene_path != 'false':
-
 
         start_date = dt.datetime.now()
         start_date_str = dt.datetime.strftime(start_date, '%Y-%m-%dT%H:%M:%S')
@@ -5892,7 +6358,8 @@ def main(args):
 
         sample_information = retrieve_sample_data(sample_metadata_path)
 
-        fasta_location = pre_processing(sample_information, output_path,threads, prob ,add_gene_path,re_use_augustus_path)
+        fasta_location = pre_processing(sample_information, output_path, threads, prob, add_gene_path,
+                                        re_use_augustus_path)
         print(' finisht adding genomes to "{0}"'.format(fasta_location))
 
         if recluster:
@@ -5902,7 +6369,7 @@ def main(args):
             results = seed_creation(output_path, min_seq_length, word_size, window_size,
                                     clustering_sim,
                                     threads, kmer_offset, seq_num_cluster, representative_filter, intra_filter,
-                                    BSR_cutoff, file_prefix)
+                                    BSR_cutoff, file_prefix,blast_dir)
 
     ############
     # recluster#
@@ -5914,23 +6381,35 @@ def main(args):
         results = seed_creation(output_path, min_seq_length, word_size, window_size,
                                 clustering_sim,
                                 threads, kmer_offset, seq_num_cluster, representative_filter, intra_filter,
-                                BSR_cutoff, file_prefix)
+                                BSR_cutoff, file_prefix,blast_dir)
 
 
     #######################
-    # generate MLST scheme#
-    ######################
-    elif gMLST:
-        generate_mlst(output_path, orphans, threads, BSRn)
-        #generate some statistical info for R graphing
+    # Refine scheme seeed #
+    #######################
+    elif r_loci:
+        refine_MLST_seed(output_path, orphans, threads, BSRn,blast_dir, d_loci)
+        # generate some statistical info for R graphing
         generate_statistics_format_for_R(output_path)
 
+    #######################
+    # generate MLST scheme#
+    #######################
+
+    elif gMLST:
+        generate_MLST_scheme(output_path, BSRn)
+
+    ###################################
+    # blast locus names on local NCBI #
+    ###################################
+
+    elif NCBIn_path != "False":
+        Blast_loci_of_schemes(output_path, NCBIn_path, threads, identity_cutoff, coverage_cutoff)
 
     #########
     # Total #
     #########
     else:
-
 
         # creating a nice statistic overiew of the euTyper run
         print(' sample metadata and input files passed the check')
@@ -5939,7 +6418,7 @@ def main(args):
         print('\nStarted at: {0}\n'.format(start_date_str))
         sample_information = retrieve_sample_data(sample_metadata_path)
 
-        print('Number of genomes/assemblies: {0}'.format( len(sample_information)))
+        print('Number of genomes/assemblies: {0}'.format(len(sample_information)))
         print('data will be stored at: {0}'.format(args[1]))
 
         print('BLAST Score Ratio: {0}'.format(args[3]))
@@ -5952,23 +6431,25 @@ def main(args):
         if not os.path.isdir(output_path):
             os.makedirs(output_path)
 
-        #retrieve the sample names from sample metadata
+        # retrieve the sample names from sample metadata
         ######################################
         # start preprocessing all input files#
         ######################################
-        fasta_location = pre_processing(sample_information, output_path,threads, prob ,path_to_input_folder,re_use_augustus_path)
+        fasta_location = pre_processing(sample_information, output_path, threads, prob, path_to_input_folder,
+                                        re_use_augustus_path)
 
         ##############################################
         # CREATE scheme seed by clustering & blasting#
         ##############################################
         results = seed_creation(output_path, min_seq_length, word_size, window_size, clustering_sim,
-                      threads, kmer_offset, seq_num_cluster, representative_filter, intra_filter, BSR_cutoff, file_prefix)
-
+                                threads, kmer_offset, seq_num_cluster, representative_filter, intra_filter, BSR_cutoff,
+                                file_prefix,blast_dir)
 
         # print message about schema that was created
 
-        generate_mlst(output_path, orphans, threads, BSRn)
-        #generate some statistical info for R graphing
+        refine_MLST_seed(output_path, orphans, threads, BSRn,blast_dir, d_loci)
+        N_loci = generate_MLST_scheme(output_path, BSRn)
+        # generate some statistical info for R graphing
         generate_statistics_format_for_R(output_path)
         end_date = dt.datetime.now()
         end_date_str = dt.datetime.strftime(end_date, '%Y-%m-%dT%H:%M:%S')
@@ -5976,13 +6457,17 @@ def main(args):
         delta = end_date - start_date
         minutes, seconds = divmod(delta.total_seconds(), 60)
 
+        if NCBIn_path != "False":
+            if (NCBIn_path).isdir():
+                Blast_loci_of_schemes(output_path, NCBIn_path, threads, identity_cutoff, coverage_cutoff)
+
         print('\nFinished at: {0}'.format(end_date_str))
         print('Created schema with {0} loci based on {1} genome in'
-              '{2: .0f}m{3: .0f}s.'.format(len(results[0]), len(sample_information),
+              '{2: .0f}m{3: .0f}s.'.format(N_loci, len(sample_information),
                                            minutes, seconds))
 
-if __name__ == '__main__':
 
+if __name__ == '__main__':
     print('\n{0}\n{1}\n{0}'.format('-' * 9, ' euTyper'))
 
     # parse arguments or add the default for programm
